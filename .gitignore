@@ -1,0 +1,18 @@
+# Bytecode / caches
+__pycache__/
+*.py[cod]
+.pytest_cache/
+
+# Packaging artifacts (pip install -e .)
+*.egg-info/
+build/
+dist/
+
+# Tool state
+.code-review-graph/
+
+# Environments / coverage
+.venv/
+venv/
+.coverage
+htmlcov/
