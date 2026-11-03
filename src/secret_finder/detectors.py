@@ -23,9 +23,14 @@ from secret_finder.rules import ConfigError, ScanConfig
 __all__ = [
     "DetectionPipeline",
     "EntropyDetector",
+    "HEURISTIC_RULE_IDS",
     "RegexDetector",
     "mask_secret",
 ]
+
+# Secondary heuristic rules (Tier 3, "not proof"): dropped on any line where a
+# primary (non-heuristic) regex rule already matched.
+HEURISTIC_RULE_IDS: frozenset[str] = frozenset({"aws-credential-var"})
 
 
 def mask_secret(s: str) -> str:
@@ -138,6 +143,11 @@ class DetectionPipeline:
             if _path_matches(line.file, self._ignore_paths):
                 continue
             regex_findings, matched = self._regex.scan(line)
+            # A primary rule firing on this line silences heuristics (HLD §5).
+            if any(f.rule not in HEURISTIC_RULE_IDS for f in regex_findings):
+                regex_findings = [
+                    f for f in regex_findings if f.rule not in HEURISTIC_RULE_IDS
+                ]
             # Regex wins for inner tokens too: exclude raw matches AND the
             # candidates extracted from them (password/JWT quote-strip cases).
             exclude = set(matched)

@@ -20,6 +20,8 @@ from secret_finder.models import Rule
 POSITIVE = {
     "aws-access-key": "AKIAIOSFODNN7EXAMPLE",
     "aws-secret-key": 'aws_secret_access_key = "wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY"',
+    # real incident: .env line with 22-char unquoted lowercase-alnum value
+    "aws-credential-var": "AWS_ACCESS_KEY=adsn" + "b1c2d3e4f5g6h7i8j9",
     "pem-private-key": "-----BEGIN RSA PRIVATE KEY-----",
     "github-token": "ghp_" + "A" * 36,
     "slack-token": "xoxb-0123456789-abcdefghij",
@@ -32,6 +34,7 @@ POSITIVE = {
 NEGATIVE = {
     "aws-access-key": "AKIA123TOOSHORT",
     "aws-secret-key": 'aws_secret_access_key = "too-short"',
+    "aws-credential-var": "AWS_ACCESS_KEY=your-key-here",
     "pem-private-key": "-----BEGIN CERTIFICATE-----",
     "github-token": "ghp_tooshort",
     "slack-token": "xox-0123456789-abcdefghij",
@@ -67,6 +70,59 @@ def test_each_default_rule_matches_positive_and_rejects_negative(rid):
         f"{rid} should not match {NEGATIVE[rid]!r}"
     )
     assert rule.reason and rule.severity in {"high", "medium", "low"}
+
+
+def test_aws_credential_var_positive_variants():
+    pattern = re.compile(rule_by_id(DEFAULT_RULES, "aws-credential-var").regex)
+    # real incident: AWS_ACCESS_KEY with 22-char unquoted lowercase-alnum value
+    assert pattern.search("AWS_ACCESS_KEY=adsn" + "b1c2d3e4f5g6h7i8j9")
+    assert pattern.search("aws_secret_key = " + "wJalrXUtnFEMI7KMDENGBPxRf")
+    assert pattern.search("AWS_ACCESS_KEY_ID=" + "wJalrXUtnFEMI7KMDENGB")
+    # infix variant the naive (access|secret) pattern missed:
+    assert pattern.search("AWS_SECRET_ACCESS_KEY=" + "wJalrXUtnFEMI7KMDENGB")
+    assert pattern.search("aws_secret_access_key_id=" + "wJalrXUtnFEMI7KMDENGB")
+
+
+def test_aws_credential_var_negative_variants():
+    pattern = re.compile(rule_by_id(DEFAULT_RULES, "aws-credential-var").regex)
+    assert not pattern.search("AWS_ACCESS_KEY=" + "a" * 15)  # value < 16 chars
+    assert not pattern.search(
+        "MY_ACCESS_THING=abcdefghijklmnopqrst"
+    )  # not a credential var
+    assert not pattern.search("AWS_ACCESS_KEY value-without-separator")  # no =
+
+
+def test_password_assignment_quotes_are_optional():
+    pattern = re.compile(rule_by_id(DEFAULT_RULES, "password-assignment").regex)
+    assert pattern.search("password=hunter2supersecret")  # unquoted (.env style)
+    assert pattern.search('password = "hunter2secret"')  # quoted regression
+    assert not pattern.search("password=abc")  # value < 6 chars
+    assert not pattern.search('password: "abc"')  # quoted but value < 6 chars
+
+
+def test_api_key_assignment_unquoted_high_severity():
+    rule = rule_by_id(DEFAULT_RULES, "api-key-assignment")
+    pattern = re.compile(rule.regex)
+    assert pattern.search("secret=abcdefgh1234")
+    assert pattern.search("access_token=abcdefghijkl1234")
+    assert pattern.search("api_key=xyz123456789")
+    assert not pattern.search("max_token=2048")  # value < 8 chars
+    assert rule.severity == "high"
+
+
+def test_confidence_taxonomy_severities():
+    by_id = {r.id: r for r in DEFAULT_RULES}
+    # Tier 1: high-confidence assignments
+    assert by_id["password-assignment"].severity == "high"
+    assert by_id["api-key-assignment"].severity == "high"
+    # Tier 2: recognisable credentials
+    assert by_id["aws-access-key"].severity == "high"
+    assert by_id["aws-secret-key"].severity == "high"
+    assert by_id["pem-private-key"].severity == "high"
+    # Tier 3: secondary heuristic, not proof
+    assert by_id["aws-credential-var"].severity == "medium"
+    assert by_id["aws-credential-var"].reason.startswith("Heuristic:")
+    assert by_id["jwt"].severity == "medium"
 
 
 def test_defaults_shape():

@@ -31,18 +31,25 @@ def charset_normalized_entropy(s: str) -> float:
 
 
 def extract_candidates(content: str, min_length: int = ENTROPY_MIN_LENGTH) -> list[str]:
-    """Collect base64-ish and hex substrings >= min_length, deduped in order."""
+    """Collect base64-ish and hex substrings >= min_length, deduped in order.
+
+    Each span is split on ``=`` so env-style assignments (``NAME=value``)
+    score the value separately from the variable name; base64 ``=`` occurs
+    only as trailing padding, so the split is safe. Empty and shorter-than-
+    ``min_length`` parts are dropped.
+    """
     pattern = re.compile(
         rf"[A-Za-z0-9+/=_-]{{{min_length},}}|[0-9a-fA-F]{{{min_length},}}"
     )
     out: list[str] = []
     seen: set[str] = set()
     for m in pattern.finditer(content):
-        token = _QUOTES_RE.sub("", m.group(0)).rstrip("=")
-        if len(token) < min_length or token in seen:
-            continue
-        seen.add(token)
-        out.append(token)
+        for part in m.group(0).split("="):
+            token = _QUOTES_RE.sub("", part).rstrip("=")
+            if len(token) < min_length or token in seen:
+                continue
+            seen.add(token)
+            out.append(token)
     return out
 
 

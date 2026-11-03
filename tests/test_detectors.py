@@ -26,6 +26,27 @@ SHA256 = "deadbeefcafebabe1234567890abcdef" * 2
 # 32 distinct chars → raw Shannon H = 5.0 ≥ default threshold 4.5
 HIGH_ENTROPY_TOKEN = "abcdefghijklmnopqrstuvwxyzABCDEF"
 HIGH_ENTROPY_TOKEN_2 = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdef"
+AWS_SECRET_40 = "wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY"  # classic 40-char key
+# 22 lowercase alnum, H ≈ 3.46 < 4.5 → entropy cannot flag it (self-validating)
+LOW_ENTROPY_VALUE = "aabbccddeeffgghhiijjkk"
+
+PRIMARY_SECRET_RULE = Rule(
+    id="aws-secret-key",
+    name="AWS Secret Access Key",
+    regex=r"(?i)aws_secret_access_key\s*[:=]\s*['\"]?[A-Za-z0-9/+=]{40}",
+    severity=SEVERITY_HIGH,
+    reason="AWS secret access key",
+)
+HEURISTIC_RULE = Rule(
+    id="aws-credential-var",
+    name="AWS credential variable",
+    regex=(
+        r"(?i)\baws[_-]?(?:access|secret)[_-]?key(?:[_-]?id)?"
+        r"\s*[:=]\s*['\"]?[A-Za-z0-9/+=_-]{16,}"
+    ),
+    severity=SEVERITY_MEDIUM,
+    reason="AWS credential-style variable assignment",
+)
 
 
 def _config(rules, ignore_paths=(), threshold=4.5):  # raw bits/char scale
@@ -83,7 +104,7 @@ def test_regex_detector_near_miss_yields_nothing():
     det = RegexDetector(list(DEFAULT_RULES))
     near_misses = [
         AddedLine("src/app.py", 1, "AKIA1234567890ABCDE"),  # 15, needs 16
-        AddedLine("src/app.py", 2, "password = hunter2xyz"),  # unquoted
+        AddedLine("src/app.py", 2, "password = abcd"),  # unquoted ok now, but 4 < 6
         AddedLine("src/app.py", 3, "-----BEGIN RSA PUBLIC KEY-----"),  # not PRIVATE
     ]
     for line in near_misses:
@@ -261,3 +282,55 @@ def test_pipeline_returns_findings_in_stable_order():
         ("b.py", 5),
         ("c.py", 3),
     ]
+
+
+def test_pipeline_primary_rule_suppresses_heuristic_on_same_line():
+    assert len(AWS_SECRET_40) == 40  # self-validating: primary needs {40}
+    line = AddedLine("src/app.py", 1, f"AWS_SECRET_ACCESS_KEY={AWS_SECRET_40}")
+    findings = DetectionPipeline(_config([PRIMARY_SECRET_RULE, HEURISTIC_RULE])).run(
+        [line]
+    )
+    assert [f.rule for f in findings] == ["aws-secret-key"]
+    assert findings[0].severity == SEVERITY_HIGH
+
+
+def test_pipeline_drops_heuristic_when_primary_matches_same_line():
+    # Both rules genuinely match this line (non-vacuous suppression check).
+    line = AddedLine(
+        "src/app.py",
+        1,
+        f'aws_secret_access_key = "{AWS_SECRET_40}" '
+        f'aws_secret_key = "abcdefghijklmnopqrst"',
+    )
+    only_primary, _ = RegexDetector([PRIMARY_SECRET_RULE]).scan(line)
+    only_heuristic, _ = RegexDetector([HEURISTIC_RULE]).scan(line)
+    assert [f.rule for f in only_primary] == ["aws-secret-key"]
+    assert [f.rule for f in only_heuristic] == ["aws-credential-var"]
+
+    findings = DetectionPipeline(_config([PRIMARY_SECRET_RULE, HEURISTIC_RULE])).run(
+        [line]
+    )
+    assert [f.rule for f in findings] == ["aws-secret-key"]
+
+
+def test_pipeline_keeps_heuristic_when_no_primary_matched():
+    assert len(LOW_ENTROPY_VALUE) == 22  # self-validating: heuristic needs {16,}
+    assert shannon_entropy(LOW_ENTROPY_VALUE) < 4.5  # entropy stays quiet
+    line = AddedLine("src/app.py", 1, f"AWS_ACCESS_KEY={LOW_ENTROPY_VALUE}")
+    findings = DetectionPipeline(_config([HEURISTIC_RULE])).run([line])
+    assert [f.rule for f in findings] == ["aws-credential-var"]
+    assert findings[0].severity == SEVERITY_MEDIUM
+
+
+def test_pipeline_heuristic_suppression_is_per_line():
+    findings = DetectionPipeline(_config([PRIMARY_SECRET_RULE, HEURISTIC_RULE])).run(
+        [
+            AddedLine(
+                "src/app.py",
+                1,
+                f'aws_secret_access_key = "{AWS_SECRET_40}"',
+            ),
+            AddedLine("src/app.py", 2, f"AWS_ACCESS_KEY={LOW_ENTROPY_VALUE}"),
+        ]
+    )
+    assert [f.rule for f in findings] == ["aws-secret-key", "aws-credential-var"]

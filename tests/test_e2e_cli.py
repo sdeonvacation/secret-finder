@@ -371,6 +371,87 @@ def test_entropy_fires_at_default_config_on_novel_token(git_repo: Path) -> None:
     assert_no_raw_secrets(proc, token)
 
 
+# --- .env incident + confidence tiers (regression: commit 63f774c) ----------
+
+# 22-char lowercase-alnum under AWS_ACCESS_KEY: no AKIA format, low entropy
+# (H=3.33) — missed by every layer until the aws-credential-var heuristic.
+ENV_INCIDENT_VALUE = "adsn" + "b1c2d3e4f5g6h7i8j9"
+AWS_SECRET_40 = "wJalrXUtnFEMI7KMDENGB" + "PxrEfCnXmQ9tL5vY2hK"  # exactly 40 chars
+PASSWORD_VALUE = "hunter2supersecret"
+
+
+def test_env_aws_var_heuristic_catches_incident(git_repo: Path) -> None:
+    """Regression for 'No secrets found' on commit 63f774c: Tier 3 heuristic
+    must flag a long value on an AWS credential variable, unquoted, .env style."""
+    assert len(ENV_INCIDENT_VALUE) == 22
+    (git_repo / ".env").write_text(
+        f"AWS_ACCESS_KEY={ENV_INCIDENT_VALUE}\n", encoding="utf-8"
+    )
+    commit_all(git_repo, "add .env")
+
+    proc = run_cli("--commit", "HEAD", "--json", cwd=git_repo)
+    assert proc.returncode == 1
+    doc = parse_json_output(proc)
+
+    hits = [f for f in doc["findings"] if f["rule"] == "aws-credential-var"]
+    assert len(hits) == 1
+    assert hits[0]["file"] == ".env"
+    assert hits[0]["line"] == 1
+    assert hits[0]["severity"] == "medium"
+    assert "Heuristic" in hits[0]["reason"]
+    assert_no_raw_secrets(proc, ENV_INCIDENT_VALUE)
+
+
+def test_unquoted_password_assignment_is_high_confidence(git_repo: Path) -> None:
+    """Tier 1: quotes optional, unquoted .env-style password still high."""
+    (git_repo / ".env").write_text(f"password={PASSWORD_VALUE}\n", encoding="utf-8")
+    commit_all(git_repo)
+
+    proc = run_cli("--commit", "HEAD", "--json", cwd=git_repo)
+    assert proc.returncode == 1
+    doc = parse_json_output(proc)
+    hits = [f for f in doc["findings"] if f["rule"] == "password-assignment"]
+    assert len(hits) == 1
+    assert hits[0]["severity"] == "high"
+    assert_no_raw_secrets(proc, PASSWORD_VALUE)
+
+
+def test_findings_prioritized_high_before_heuristic(git_repo: Path) -> None:
+    """Tier order: high-confidence assignment precedes Tier 3 heuristic in JSON."""
+    (git_repo / ".env").write_text(
+        f"password={PASSWORD_VALUE}\nAWS_ACCESS_KEY={ENV_INCIDENT_VALUE}\n",
+        encoding="utf-8",
+    )
+    commit_all(git_repo)
+
+    proc = run_cli("--commit", "HEAD", "--json", cwd=git_repo)
+    assert proc.returncode == 1
+    doc = parse_json_output(proc)
+    rank = {"high": 0, "medium": 1, "low": 2}
+    sev = [f["severity"] for f in doc["findings"]]
+    assert sev == sorted(sev, key=rank.__getitem__)
+    assert doc["findings"][0]["rule"] == "password-assignment"
+    assert doc["findings"][-1]["rule"] == "aws-credential-var"
+
+
+def test_heuristic_suppressed_when_primary_matches_line(git_repo: Path) -> None:
+    """Tier 3 is secondary: canonical 40-char secret assignment yields only the
+    primary aws-secret-key finding — no aws-credential-var duplicate."""
+    assert len(AWS_SECRET_40) == 40
+    (git_repo / ".env").write_text(
+        f"AWS_SECRET_ACCESS_KEY={AWS_SECRET_40}\n", encoding="utf-8"
+    )
+    commit_all(git_repo)
+
+    proc = run_cli("--commit", "HEAD", "--json", cwd=git_repo)
+    assert proc.returncode == 1
+    doc = parse_json_output(proc)
+    rules_on_line = {f["rule"] for f in doc["findings"] if f["line"] == 1}
+    assert "aws-secret-key" in rules_on_line
+    assert "aws-credential-var" not in rules_on_line
+    assert_no_raw_secrets(proc, AWS_SECRET_40)
+
+
 # --- 7/8/9/10. error paths (exit 2) ----------------------------------------
 
 

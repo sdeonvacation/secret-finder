@@ -144,10 +144,16 @@ class JsonReporter: ...   # stable schema (section 6)
 1. **Regex pass** over each `AddedLine`: any matching rule yields a `Finding`
    with that rule's `id`, `severity`, `reason`. Skips lines whose path matches
    a rule `path_allowlist` or global `ignore_paths`.
-2. **Entropy pass** runs only on candidate substrings **not already matched**
+2. **Heuristic suppression (Tier 3)**: a finding from a secondary heuristic
+   rule (e.g. `aws-credential-var`) is dropped when any primary (Tier 1/2)
+   regex rule already matched the same line, so the primary rule's precise
+   reason wins. Tier 3 findings are "secondary heuristic, not proof".
+3. **Entropy pass** runs only on candidate substrings **not already matched**
    by any regex rule in step 1. This is the "regex wins" rule: known shapes
-   always get a precise reason; entropy only catches novel secrets.
-3. **Dedupe**: findings keyed by `(file, line, rule)`; first occurrence wins
+   always get a precise reason; entropy only catches novel secrets. This
+   exclusion is unchanged — entropy suppression is unaffected by the Tier 3
+   heuristic-suppression step.
+4. **Dedupe**: findings keyed by `(file, line, rule)`; first occurrence wins
    (handles staged+unstaged overlap).
 
 ## 6. JSON Output Schema
@@ -170,6 +176,8 @@ class JsonReporter: ...   # stable schema (section 6)
 
 `secret_preview` is always masked (first 4 chars + `*`), never the raw secret.
 `--quiet` still emits JSON but suppresses the human summary on stderr.
+`findings` are ordered by severity (high → medium → low), then file, then
+line — highest-confidence first.
 
 ## 7. Config File Schema & Merge Semantics
 

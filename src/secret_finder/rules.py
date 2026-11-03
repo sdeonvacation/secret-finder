@@ -60,6 +60,13 @@ DEFAULT_RULES: list[Rule] = [
         "AWS secret access key assigned to a variable",
     ),
     _rule(
+        "aws-credential-var",
+        "AWS Credential Variable",
+        r"(?i)\baws[_-]?(?:secret[_-]?)?(?:access[_-]?)?key(?:[_-]?id)?\s*[:=]\s*['\"]?[A-Za-z0-9/+=_-]{16,}['\"]?",
+        SEVERITY_MEDIUM,
+        "Heuristic: long value assigned to AWS credential variable (format not verified)",
+    ),
+    _rule(
         "pem-private-key",
         "PEM Private Key",
         r"-----BEGIN (?:RSA |EC |DSA |OPENSSH |PGP )?PRIVATE KEY-----",
@@ -90,15 +97,15 @@ DEFAULT_RULES: list[Rule] = [
     _rule(
         "password-assignment",
         "Password Assignment",
-        r"(?i)(password|passwd|pwd)\s*[:=]\s*['\"][^'\"]{6,}['\"]",
+        r"(?i)(?:password|passwd|pwd)\s*[:=]\s*['\"]?[^'\"\s]{6,}['\"]?",
         SEVERITY_HIGH,
         "Hard-coded password in an assignment",
     ),
     _rule(
         "api-key-assignment",
         "API Key Assignment",
-        r"(?i)(api[_-]?key|apikey|secret|token)\s*[:=]\s*['\"][^'\"]{8,}['\"]",
-        SEVERITY_MEDIUM,
+        r"(?i)(?:api[_-]?key|apikey|secret|access[_-]?token|token)\s*[:=]\s*['\"]?[^'\"\s]{8,}['\"]?",
+        SEVERITY_HIGH,
         "Hard-coded API key/secret/token in an assignment",
     ),
     _rule(

@@ -62,6 +62,29 @@ def test_extract_skips_short_and_dedupes():
     assert len(cands) == len(set(cands))
 
 
+def test_extract_splits_env_assignment_value_from_name():
+    # name "AWS_ACCESS_KEY" (14) < 16 → dropped; 22-char value kept
+    value = "abcdefghij0123456789kl"
+    cands = extract_candidates(f"AWS_ACCESS_KEY={value}")
+    assert cands == [value]
+    assert "AWS_ACCESS_KEY" not in cands
+
+
+def test_extract_env_value_with_base64_padding_is_single_candidate():
+    # base64 value: 38 chars + "==" padding; split on "=" must not
+    # produce junk parts, padding must not survive into the candidate
+    core = "QUJDREVGR0hJSktMTU5PUFNFT1JGUVhYWVhYWA"
+    cands = extract_candidates(f"TOKEN={core}==")
+    assert cands == [core]
+
+
+def test_extract_env_assignments_preserve_order_and_dedupe():
+    v1 = "abcdefghij0123456789kl"
+    v2 = "kl9876543210jihgfedcba"
+    content = f"FIRST={v1}\nSECOND={v2}\nFIRST={v1}"
+    assert extract_candidates(content) == [v1, v2]
+
+
 def test_is_allowlisted_matches_hash_and_uuid():
     patterns = [
         re.compile(r"[0-9a-f]{40}"),

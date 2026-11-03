@@ -54,7 +54,16 @@ secret-finder --rules .secret-finder.json
 
 ## Output
 
-Human-readable output (default) groups findings by file as `file:line — reason`. With `--json`, stdout carries only the JSON document; diagnostics go to stderr.
+Human-readable output (default) groups findings by file under a bare `<file>:` header, one finding per line as `  <line>: [<severity>] <rule> — <reason>`:
+
+```
+src/config.py:
+  12: [high] aws-access-key — AWS access key ID
+```
+
+With `--json`, stdout carries only the JSON document; diagnostics go to stderr.
+
+Findings are presented highest-confidence first: severity (`high` → `medium` → `low`), then file, then line. JSON applies that as a flat sort; the human format orders file groups by their best severity, and lines within a group by severity then line.
 
 JSON output (`--json`) follows a fixed schema:
 
@@ -77,6 +86,7 @@ JSON output (`--json`) follows a fixed schema:
 - `rule` is the matched rule id, or `"entropy"` for entropy-only findings.
 - `severity` is one of `high`, `medium`, `low`.
 - `secret_preview` is always masked (first 4 characters + `*`); the raw secret is never printed.
+- `findings` are ordered by severity (high → medium → low), then file, then line.
 
 ## Rules & config
 
@@ -88,8 +98,19 @@ Detection precedence: **regex rules win**. The entropy pass only flags novel hig
 - PEM private key blocks
 - GitHub and Slack tokens
 - JWTs
-- `password` / `api_key` / `secret` / `token` assignments
+- `password` / `api_key` / `secret` / `access_token` assignments (quotes now optional, so `.env`/yaml-style `password = "..."` or `password = ...` both match)
 - Connection strings with embedded credentials
+- `aws-credential-var` heuristic: `AWS_ACCESS_KEY=` / `AWS_SECRET_ACCESS_KEY=` / `AWS_ACCESS_KEY_ID=` with a value ≥ 16 chars (format NOT verified — see Confidence tiers)
+
+Severity notes: `password-assignment` is `high`; `api-key-assignment` severity is now **`high`** (raised from `medium`). JWT stays `medium`.
+
+### Confidence tiers
+
+Findings fall into three tiers, which drive both severity and output ordering (highest-confidence first):
+
+- **Tier 1 — high-confidence assignments.** `password = "..."`, `api_key = "..."`, `secret = "..."`, `access_token = "..."` (quotes optional, works in `.env`/yaml style). Rules `password-assignment` and `api-key-assignment`, both severity `high`.
+- **Tier 2 — recognisable credentials.** AWS access key IDs (`AKIA…`), AWS secret assignments, PEM private-key headers, GitHub/Slack tokens, connection strings — all severity `high`. JWT stays `medium` (well-defined but common in fixtures).
+- **Tier 3 — potentially random credentials / heuristics.** Severity `medium`, explicitly a **secondary heuristic, not proof**. Includes the `aws-credential-var` rule (value ≥ 16 chars, format NOT verified) and entropy findings (rule `entropy`, "possible secret" signals). A Tier 3 rule finding is suppressed on any line where a Tier 1/2 regex rule already matched, so a primary rule's precise reason wins.
 
 ### Config file format
 
@@ -146,6 +167,8 @@ Stderr carries diagnostics; stdout carries only findings, so `--json` output sta
 ## Where it fails
 
 - **Entropy false positives.** Minified JavaScript, base64 blobs, and other dense data can trip the entropy pass. Tune `entropy.threshold`, raise `min_length`, add paths to `ignore_paths`, or extend the entropy `allowlist`. The entropy pass does not consult per-rule `path_allowlist`.
+- **Heuristic rules flag placeholders too.** Tier 3 rules only check shape, not validity: `AWS_ACCESS_KEY=your_access_key_here` (≥ 16 chars) matches `aws-credential-var` even though it is a placeholder. These are secondary heuristics, not proof — verify before treating them as real secrets.
+- **Entropy needs long, high-entropy values.** Candidates must be ≥ 16 chars with raw entropy `H ≥ 4.5`. Candidate extraction splits on `=`, so a `.env` line's `NAME=value` scores the value alone (the name no longer dilutes the score) — but low-entropy values still won't fire entropy.
 - **Generated UUIDs and hashes.** Long hex or random-looking strings (checksums, build IDs) are high-entropy by nature. The default allowlist covers sha1/sha256/UUID shapes, but repo-specific hashes may still need allowlisting.
 - **Secrets already in history are not found.** Only new/changed added lines are scanned — this is not a full-history audit. Use `--commit` to check one commit, or diff against an older ref, but pre-existing secrets in untouched lines are out of scope.
 - **Binary and unusual encodings are skipped.** Binary files are detected and skipped entirely; secrets in non-UTF-8 or exotic encodings may not be tokenized correctly.
