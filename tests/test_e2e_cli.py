@@ -16,9 +16,8 @@ Hermeticity: git (both test setup and CLI-driven) runs with
 ambient user/system git config cannot alter diff output, branch naming, or
 commit behaviour. Every subprocess call is bounded by ``timeout=30``.
 
-Source of truth for all expectations: design/HLD_secret-finder.md (§3 data
-flow, §6 JSON schema, §10 exit codes) and plans/PLAN_secret-finder.md
-(Testing Strategy). Exit-code contract: 0 = no findings, 1 = findings,
+Expectations come from the README and the CLI behavior contract (input
+modes, JSON schema, exit codes). Exit-code contract: 0 = no findings, 1 = findings,
 2 = usage/config/git/file error; stdout carries findings only, stderr
 carries diagnostics/errors.
 """
@@ -39,13 +38,13 @@ SRC_DIR = REPO_ROOT / "src"
 
 TIMEOUT = 30
 
-# --- secret fixture strings (shapes documented in README/HLD) ---------------
+# --- secret fixture strings (shapes documented in README) -------------------
 AWS_KEY = "AKIAIOSFODNN7EXAMPLE"  # AKIA + 16 uppercase alnum, caught by built-in rules
 PASSWORD = "hunter2supersecret"  # password-assignment fixture
 SHA1_HEX = "da39a3ee5e6b4b0d3255bfef95601890afd80709"  # 40-hex, entropy-allowlisted
 CUSTOM_SECRET = "my-custom-secret-9347"  # matched only by a custom --rules rule
 
-# --- JSON schema (HLD §6) ---------------------------------------------------
+# --- JSON schema ------------------------------------------------------------
 TOP_LEVEL_KEYS = {"findings", "summary"}
 FINDING_KEYS = {"file", "line", "rule", "severity", "reason", "secret_preview"}
 SUMMARY_KEYS = {"total", "high", "medium", "low"}
@@ -140,10 +139,10 @@ def commit_all(repo: Path, message: str = "wip") -> None:
 
 
 def parse_json_output(proc: subprocess.CompletedProcess) -> dict:
-    """Assert exit 0/1 and exact HLD §6 schema; returns the parsed document.
+    """Assert exit 0/1 and exact JSON schema; returns the parsed document.
 
     json.loads over the *entire* stdout - any stray chatter or truncation
-    fails here, which is the stdout-purity guarantee (HLD §10).
+    fails here, which is the stdout-purity guarantee.
     """
     assert proc.returncode in (0, 1), f"rc={proc.returncode} stderr={proc.stderr}"
     doc = json.loads(proc.stdout)
@@ -218,7 +217,7 @@ def test_working_tree_text_output(git_repo: Path) -> None:
     proc = run_cli("--text", cwd=git_repo)
     assert proc.returncode == 1
     assert WORKING_TREE_REL in proc.stdout  # grouped by file
-    assert "AWS access key ID" in proc.stdout  # documented rule reason (HLD §6)
+    assert "AWS access key ID" in proc.stdout  # documented rule reason
     assert_no_raw_secrets(proc, AWS_KEY, PASSWORD)
 
 

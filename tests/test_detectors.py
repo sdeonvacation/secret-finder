@@ -1,4 +1,4 @@
-"""Unit tests for the detection pipeline (HLD §4, §5, §8)."""
+"""Unit tests for the detection pipeline (pipeline, precedence, entropy gate)."""
 
 import pytest
 
@@ -178,7 +178,7 @@ def test_regex_detector_entropy_floor_gates_findings():
         regex=r"token\s*=\s*[A-Za-z0-9]+",
         severity=SEVERITY_MEDIUM,
         reason="token assignment",
-        entropy_floor=3.0,  # raw H bits/char (HLD §7 example)
+        entropy_floor=3.0,  # raw H bits/char (example value)
     )
     det = RegexDetector([rule])
     low_value = "token = " + "a" * 32  # match len 40

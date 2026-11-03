@@ -16,3 +16,8 @@ dist/
 venv/
 .coverage
 htmlcov/
+
+# Planning / design docs (local only, not tracked)
+plans/
+design/
+requirements/

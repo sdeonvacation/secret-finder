@@ -1,4 +1,4 @@
-"""Unit tests for cli.main output path, incl. BrokenPipeError (HLD §10).
+"""Unit tests for cli.main output path, incl. BrokenPipeError (exit-code contract).
 
 Exit contract: 0 = no findings, 1 = findings, 2 = usage/config/git error.
 stdout carries findings only; stderr carries diagnostics.

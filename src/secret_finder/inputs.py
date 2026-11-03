@@ -10,7 +10,7 @@ from typing import Iterable, Iterator, Protocol
 
 from .models import AddedLine
 
-# Generous bound so a hung git cannot hang the CLI forever (HLD §9).
+# Generous bound so a hung git cannot hang the CLI forever.
 GIT_TIMEOUT_SECONDS = 60
 
 

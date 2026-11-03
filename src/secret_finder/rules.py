@@ -1,4 +1,4 @@
-"""Config schema, built-in rules, and merge semantics (HLD §7)."""
+"""Config schema, built-in rules, and merge semantics."""
 
 from __future__ import annotations
 
@@ -267,7 +267,7 @@ def _merge_entropy(
 
 
 def load_config(path: str | None = None) -> ScanConfig:
-    """Load scan config: defaults first, then optional JSON overrides (HLD §7)."""
+    """Load scan config: defaults first, then optional JSON overrides."""
     rules = list(DEFAULT_RULES)
     ignore_paths = list(DEFAULT_IGNORE_PATHS)
     threshold = float(DEFAULT_ENTROPY["threshold"])  # type: ignore[arg-type]

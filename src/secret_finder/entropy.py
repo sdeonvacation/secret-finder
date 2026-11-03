@@ -1,4 +1,4 @@
-"""Entropy-based candidate scoring per HLD §8. Stdlib only."""
+"""Entropy-based candidate scoring. Stdlib only."""
 
 import math
 import re

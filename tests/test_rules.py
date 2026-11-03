@@ -1,4 +1,4 @@
-"""Unit tests for secret_finder.rules (HLD §7 config schema + merge)."""
+"""Unit tests for secret_finder.rules (config schema + merge)."""
 
 from __future__ import annotations
 

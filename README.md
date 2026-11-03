@@ -176,7 +176,7 @@ Stderr carries diagnostics; stdout carries only findings — JSON by default (an
 
 ## Where it fails
 
-- **Entropy false positives.** Context-free entropy flagging (any ≥16-char high-entropy string anywhere) is gone by design — it FP'd IDE workspace.xml `id=`/`value=` attributes, which no longer flag on entropy alone. Keyword rules still scan XML, so `password="..."` attributes still flag via `password-assignment` and don't need `ignore_paths`. What remains can still FP when dense data shares a line with a credential-like name: minified JavaScript or base64 blobs next to `token=`/`secret=`-style names. Tune `entropy.threshold`, raise `min_length`, add paths to `ignore_paths`, or extend the entropy `allowlist`. The entropy pass does not consult per-rule `path_allowlist`.
+- **Entropy false positives.** Context-free entropy flagging (any ≥16-char high-entropy string anywhere) is deliberately removed — it FP'd IDE workspace.xml `id=`/`value=` attributes, which no longer flag on entropy alone. Keyword rules still scan XML, so `password="..."` attributes still flag via `password-assignment` and don't need `ignore_paths`. What remains can still FP when dense data shares a line with a credential-like name: minified JavaScript or base64 blobs next to `token=`/`secret=`-style names. Tune `entropy.threshold`, raise `min_length`, add paths to `ignore_paths`, or extend the entropy `allowlist`. The entropy pass does not consult per-rule `path_allowlist`.
 - **Heuristic rules flag placeholders too.** Rules only check shape, not validity: `AWS_ACCESS_KEY=your_access_key_here` (≥ 16 chars) is reported as `api-key-assignment` (high) even though it is a placeholder, and where no primary rule matches the line, `aws-credential-var` fires on any ≥ 16-char value (e.g. `aws_secret_key=<placeholder>`). These are secondary/shape-only signals — verify before treating them as real secrets.
 - **Entropy needs long, high-entropy values bound to credential-like names.** Candidates must be ≥ 16 chars with raw entropy `H ≥ 4.5` on a line matching the credential-context pattern (a credential-like name in assignment position). Candidate extraction splits on `=`, so a `.env` line's `NAME=value` scores the value alone (the name no longer dilutes the score) — but low-entropy values still won't fire entropy.
 - **Generated UUIDs and hashes.** Long hex or random-looking strings (checksums, build IDs) are high-entropy by nature. The default allowlist covers sha1/sha256/UUID shapes, but repo-specific hashes may still need allowlisting.
@@ -194,6 +194,6 @@ Run the test suite:
 python -m pytest
 ```
 
-Project layout: `src/secret_finder/` (CLI, input adapters, rules, entropy, detectors, reporters), `tests/` for unit, integration, and CLI tests, with `design/`, `plans/`, and `requirements/` documenting the spec.
+Project layout: `src/secret_finder/` (CLI, input adapters, rules, entropy, detectors, reporters), `tests/` for unit, integration, and CLI tests.
 
 `AI_PROMPTS.txt` is the transcript of this project's AI-assisted build — every prompt and question that shaped it, in chronological order.

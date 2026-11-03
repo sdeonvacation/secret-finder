@@ -51,7 +51,7 @@ class TextReporter:
 
 
 class JsonReporter:
-    """Render findings as JSON per HLD section 6.
+    """Render findings as JSON with the stable schema.
 
     Stable key order: each finding uses ``file, line, rule, severity, reason,
     secret_preview``; the document uses ``findings, summary``; the summary

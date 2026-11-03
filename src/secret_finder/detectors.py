@@ -1,4 +1,4 @@
-"""Detection pipeline: regex pass, entropy pass, precedence (HLD §4, §5)."""
+"""Detection pipeline: regex pass, entropy pass, precedence."""
 
 from __future__ import annotations
 
@@ -41,7 +41,7 @@ CREDENTIAL_CONTEXT_RE = re.compile(
 
 
 def mask_secret(s: str) -> str:
-    """First 4 chars + stars; fully masked when len <= 8 (HLD §4)."""
+    """First 4 chars + stars; fully masked when len <= 8."""
     if len(s) <= 8:
         return "*" * len(s)
     return s[:4] + "*" * (len(s) - 4)
@@ -54,7 +54,7 @@ def _path_matches(path: str, patterns: Iterable[str]) -> bool:
 
 
 class RegexDetector:
-    """Runs precompiled rules over one added line (HLD §5 step 1)."""
+    """Runs precompiled rules over one added line (first pass)."""
 
     def __init__(self, rules: list[Rule]) -> None:
         self._rules: list[tuple[Rule, re.Pattern[str]]] = []
@@ -135,7 +135,7 @@ class EntropyDetector:
 
 
 class DetectionPipeline:
-    """Regex pass → entropy pass → dedupe, per line (HLD §5)."""
+    """Regex pass → entropy pass → dedupe, per line."""
 
     def __init__(self, config: ScanConfig) -> None:
         self._regex = RegexDetector(config.rules)
@@ -154,7 +154,7 @@ class DetectionPipeline:
             if _path_matches(line.file, self._ignore_paths):
                 continue
             regex_findings, matched = self._regex.scan(line)
-            # A primary rule firing on this line silences heuristics (HLD §5).
+            # A primary rule firing on this line silences heuristics.
             if any(f.rule not in HEURISTIC_RULE_IDS for f in regex_findings):
                 regex_findings = [
                     f for f in regex_findings if f.rule not in HEURISTIC_RULE_IDS
