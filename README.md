@@ -1,6 +1,6 @@
 # secret-finder
 
-A zero-dependency Python CLI that scans git changes for leaked passwords, keys, and other secrets before they land in a branch. It normalizes three input modes (working tree, git patch file/stdin, single commit) into a stream of added lines, runs named regex rules first and Shannon-entropy detection second, and reports findings as `file:line` with a short reason — as human-readable text or stable JSON, with CI-friendly exit codes.
+A zero-dependency Python CLI that scans git changes for leaked passwords, keys, and other secrets before they land in a branch. It normalizes three input modes (working tree, git patch file/stdin, single commit) into a stream of added lines, runs named regex rules first and Shannon-entropy detection second, and reports findings as `file:line` with a short reason — as stable JSON by default, or human-readable text with `--text` — with CI-friendly exit codes.
 
 ## Install
 
@@ -14,10 +14,16 @@ From the repo root. This installs the `secret-finder` command (equivalently runn
 
 ## Usage
 
-Scan the current uncommitted working tree (unstaged + staged + untracked changes):
+Scan the current uncommitted working tree (unstaged + staged + untracked changes). With no output flag, stdout is JSON — the default output format:
 
 ```sh
 secret-finder
+```
+
+Human-readable output on stdout instead:
+
+```sh
+secret-finder --text
 ```
 
 Scan a git patch file:
@@ -38,7 +44,7 @@ Scan the diff introduced by a specific commit:
 secret-finder --commit a1b2c3d
 ```
 
-Machine-readable JSON output on stdout:
+Explicit JSON output — optional; identical to the default, kept for compatibility with existing scripts:
 
 ```sh
 secret-finder --json
@@ -50,22 +56,24 @@ Load and override rules from a JSON config file:
 secret-finder --rules .secret-finder.json
 ```
 
-`--quiet` suppresses the non-JSON human summary on stderr (JSON output itself is unaffected).
+`--text` and `--json` together is a usage error (exit `2`). `--quiet` suppresses the text-mode stderr summary only (e.g. `secret-finder: N finding(s)`); it does not change stdout and is a no-op for JSON output, which has no stderr summary on success.
 
 ## Output
 
-Human-readable output (default) groups findings by file under a bare `<file>:` header, one finding per line as `  <line>: [<severity>] <rule> — <reason>`:
+JSON is the default stdout format: JSON-by-default makes piping, `jq`, and CI the zero-flag path, and humans opt in with `--text`. With no output flag (or with `--json`), stdout carries only the JSON document (pretty-printed, with a trailing newline) and stderr stays silent on success; errors go to stderr with exit `2`.
+
+`--text` writes human-readable output on stdout, grouping findings by file under a bare `<file>:` header, one finding per line as `  <line>: [<severity>] <rule> — <reason>`:
 
 ```
 src/config.py:
   12: [high] aws-access-key — AWS access key ID
 ```
 
-With `--json`, stdout carries only the JSON document; diagnostics go to stderr.
+In `--text` mode a summary line (e.g. `secret-finder: 1 finding(s)`) goes to stderr unless `--quiet` is passed. `--text` and `--json` together is a usage error (exit `2`).
 
 Findings are presented highest-confidence first: severity (`high` → `medium` → `low`), then file, then line. JSON applies that as a flat sort; the human format orders file groups by their best severity, and lines within a group by severity then line.
 
-JSON output (`--json`) follows a fixed schema:
+JSON output (the default; `--json` is a compatibility no-op) follows a fixed schema:
 
 ```json
 {
@@ -170,7 +178,7 @@ Rule fields: `id`, `name`, `regex`, `severity`, `reason`, plus optional `path_al
 | `1` | Scan completed, findings present |
 | `2` | Usage error, config parse error, commit not found, git failure, missing file |
 
-Stderr carries diagnostics; stdout carries only findings, so `--json` output stays parseable.
+Stderr carries diagnostics; stdout carries only findings — JSON by default (and with `--json`), human-readable text only with `--text` — so default output stays parseable.
 
 ## Where it fails
 

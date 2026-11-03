@@ -75,13 +75,15 @@ class RegexDetector:
             if _path_matches(line.file, rule.path_allowlist):
                 continue
             for m in pattern.finditer(line.content):
-                value = m.group(0)
-                matched.add(value)
+                matched.add(m.group(0))
                 if (
                     rule.entropy_floor is not None
-                    and shannon_entropy(value) < rule.entropy_floor
+                    and shannon_entropy(m.group(0)) < rule.entropy_floor
                 ):
                     continue
+                # Preview masks the captured VALUE when the rule exposes a
+                # named `secret` group; falls back to the raw match otherwise.
+                value = m.groupdict().get("secret") or m.group(0)
                 findings.append(
                     Finding(
                         file=line.file,

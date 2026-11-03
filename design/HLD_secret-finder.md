@@ -5,13 +5,13 @@
 A thin CLI shell feeds three input adapters into a shared unified-diff parser,
 producing a normalized stream of added lines. A two-stage detection pipeline
 (regex rules, then entropy) tags findings, which are deduplicated and rendered
-by a text or JSON reporter.
+by the JSON reporter (default) or the text reporter (`--text`).
 
 ```
                     ┌───────────────────────────────────────────────┐
                     │                    cli.py                    │
                     │   argparse: --diff | --commit | (default)     │
-                    │            --json --rules --quiet            │
+                    │         --text --json --rules --quiet         │
                     └───────────────┬───────────────────────────────┘
                                     │ dispatch
         ┌───────────────────────────┼───────────────────────────┐
@@ -40,9 +40,9 @@ by a text or JSON reporter.
                        └────────────┬─────────────┘
                      ┌──────────────┼──────────────┐
                      ▼                             ▼
-              ┌─────────────┐               ┌─────────────┐
-              │ TextReporter│               │ JsonReporter│
-              └─────────────┘               └─────────────┘
+               ┌─────────────┐               ┌─────────────┐
+               │ JsonReporter│               │ TextReporter│
+               └─────────────┘               └─────────────┘
                        exit 0 (none) | 1 (findings) | 2 (error)
 ```
 
@@ -168,6 +168,9 @@ class JsonReporter: ...   # stable schema (section 6)
 
 ## 6. JSON Output Schema
 
+This is the CLI's default stdout format (as of the default-output change);
+`--json` is kept as a compatibility no-op identical to the default.
+
 ```json
 {
   "findings": [
@@ -185,7 +188,9 @@ class JsonReporter: ...   # stable schema (section 6)
 ```
 
 `secret_preview` is always masked (first 4 chars + `*`), never the raw secret.
-`--quiet` still emits JSON but suppresses the human summary on stderr.
+`--text` and `--json` together is a usage error (exit `2`); `--quiet`
+suppresses the `--text`-mode stderr summary only (JSON mode has no stderr
+summary on success).
 `findings` are ordered by severity (high → medium → low), then file, then
 line — highest-confidence first.
 
@@ -275,5 +280,8 @@ Merge rules:
 | `1` | scan completed, findings present |
 | `2` | usage error, config parse error, commit not found, git failure, missing file |
 
-Stderr carries diagnostics; stdout carries only findings (so `--json` output
-stays parseable).
+Stderr carries diagnostics; stdout carries only findings — the §6 JSON
+schema by default (and with `--json`), human-readable text only with
+`--text`. On success stderr is silent in JSON mode; `--text` mode emits
+summary chatter on stderr (e.g. `secret-finder: N finding(s)`) unless
+`--quiet`. `--text` together with `--json` is a usage error (exit `2`).

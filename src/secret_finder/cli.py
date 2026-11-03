@@ -28,10 +28,16 @@ def build_parser() -> argparse.ArgumentParser:
         metavar="HASH",
         help="scan the diff introduced by a single commit",
     )
-    parser.add_argument(
+    output = parser.add_mutually_exclusive_group()
+    output.add_argument(
+        "--text",
+        action="store_true",
+        help="emit human-readable findings on stdout (default is JSON)",
+    )
+    output.add_argument(
         "--json",
         action="store_true",
-        help="emit findings as JSON on stdout",
+        help="emit findings as JSON on stdout (default; kept for compatibility)",
     )
     parser.add_argument(
         "--rules",
@@ -100,13 +106,13 @@ def main(argv: list[str] | None = None) -> int:
         if stream is not None:
             stream.close()
 
-    rendered = (JsonReporter() if args.json else TextReporter()).render(findings)
+    rendered = (TextReporter() if args.text else JsonReporter()).render(findings)
     # JsonReporter output already ends with a newline; TextReporter does not.
     payload = rendered if rendered.endswith("\n") else rendered + "\n"
 
     try:
         sys.stdout.write(payload)
-        if not args.quiet and not args.json:
+        if args.text and not args.quiet:
             count = len(findings)
             noun = "finding" if count == 1 else "findings"
             print(f"secret-finder: {count} {noun}", file=sys.stderr)

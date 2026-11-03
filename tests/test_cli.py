@@ -6,6 +6,7 @@ stdout carries findings only; stderr carries diagnostics.
 
 from __future__ import annotations
 
+import json
 import sys
 from pathlib import Path
 
@@ -96,7 +97,7 @@ def test_broken_stdout_write_findings_returns_1(
     diff = _write_diff(tmp_path, FINDINGS_DIFF)
     attempts, dup2_calls = _patch_broken_stdout(monkeypatch)
 
-    assert cli.main(["--diff", diff]) == 1  # no exception escapes
+    assert cli.main(["--diff", diff, "--text"]) == 1  # no exception escapes
 
     assert attempts, "findings write attempted before the pipe broke"
     assert "src/app.py:" in attempts[0]
@@ -110,7 +111,7 @@ def test_broken_stdout_write_clean_diff_returns_0(
     diff = _write_diff(tmp_path, CLEAN_DIFF)
     attempts, dup2_calls = _patch_broken_stdout(monkeypatch)
 
-    assert cli.main(["--diff", diff]) == 0
+    assert cli.main(["--diff", diff, "--text"]) == 0
 
     assert attempts and "No secrets found." in attempts[0]
     assert dup2_calls and dup2_calls[0][1] == FAKE_FD
@@ -136,7 +137,7 @@ def test_broken_stderr_summary_keeps_status_and_stdout(
     diff = _write_diff(tmp_path, FINDINGS_DIFF)
     _patch_broken_stderr(monkeypatch)
 
-    assert cli.main(["--diff", diff]) == 1
+    assert cli.main(["--diff", diff, "--text"]) == 1
 
     captured = capsys.readouterr()
     assert "AWS access key ID" in captured.out
@@ -150,7 +151,7 @@ def test_findings_written_to_stdout_exit_1(
 ) -> None:
     diff = _write_diff(tmp_path, FINDINGS_DIFF)
 
-    assert cli.main(["--diff", diff]) == 1
+    assert cli.main(["--diff", diff, "--text"]) == 1
 
     captured = capsys.readouterr()
     assert "src/app.py:" in captured.out
@@ -164,7 +165,7 @@ def test_clean_diff_writes_no_secrets_exit_0(
 ) -> None:
     diff = _write_diff(tmp_path, CLEAN_DIFF)
 
-    assert cli.main(["--diff", diff]) == 0
+    assert cli.main(["--diff", diff, "--text"]) == 0
 
     captured = capsys.readouterr()
     assert captured.out == "No secrets found.\n"
@@ -178,6 +179,71 @@ def test_missing_diff_path_still_exits_2(
     captured = capsys.readouterr()
     assert "secret-finder: error:" in captured.err
     assert captured.out == ""
+
+
+# --- default is JSON ---------------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    ("diff_text", "expected_exit"),
+    [(FINDINGS_DIFF, 1), (CLEAN_DIFF, 0)],
+    ids=["findings", "clean"],
+)
+def test_default_output_is_json_without_stderr_chatter(
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture,
+    diff_text: str,
+    expected_exit: int,
+) -> None:
+    diff = _write_diff(tmp_path, diff_text)
+
+    assert cli.main(["--diff", diff]) == expected_exit
+
+    captured = capsys.readouterr()
+    payload = json.loads(captured.out)  # full stdout parses as JSON
+    assert isinstance(payload["findings"], list)
+    assert len(payload["findings"]) == (1 if expected_exit == 1 else 0)
+    assert captured.out.endswith("\n")  # pretty JSON + trailing newline
+    assert captured.err == ""  # no chatter on success in JSON mode
+
+
+def test_json_flag_is_byte_identical_to_default(
+    tmp_path: Path, capsys: pytest.CaptureFixture
+) -> None:
+    diff = _write_diff(tmp_path, FINDINGS_DIFF)
+
+    assert cli.main(["--diff", diff]) == 1
+    default_out = capsys.readouterr()
+
+    assert cli.main(["--diff", diff, "--json"]) == 1
+    json_out = capsys.readouterr()
+
+    assert json_out.out == default_out.out
+    assert json_out.err == default_out.err == ""
+
+
+def test_text_and_json_together_is_usage_error(
+    tmp_path: Path, capsys: pytest.CaptureFixture
+) -> None:
+    diff = _write_diff(tmp_path, FINDINGS_DIFF)
+
+    with pytest.raises(SystemExit) as excinfo:
+        cli.main(["--diff", diff, "--text", "--json"])
+
+    assert excinfo.value.code == 2
+    assert "not allowed with" in capsys.readouterr().err
+
+
+def test_quiet_suppresses_text_mode_summary(
+    tmp_path: Path, capsys: pytest.CaptureFixture
+) -> None:
+    diff = _write_diff(tmp_path, FINDINGS_DIFF)
+
+    assert cli.main(["--diff", diff, "--text", "--quiet"]) == 1
+
+    captured = capsys.readouterr()
+    assert "src/app.py:" in captured.out  # findings still on stdout
+    assert captured.err == ""
 
 
 # --- fd-redirection guard ----------------------------------------------------

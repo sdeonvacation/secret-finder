@@ -55,14 +55,14 @@ DEFAULT_RULES: list[Rule] = [
     _rule(
         "aws-secret-key",
         "AWS Secret Access Key",
-        r"(?i)aws_secret_access_key\s*[:=]\s*['\"]?[A-Za-z0-9/+=]{40}",
+        r"(?i)aws_secret_access_key\s*[:=]\s*['\"]?(?P<secret>[A-Za-z0-9/+=]{40})",
         SEVERITY_HIGH,
         "AWS secret access key assigned to a variable",
     ),
     _rule(
         "aws-credential-var",
         "AWS Credential Variable",
-        r"(?i)\baws[_-]?(?:secret[_-]?)?(?:access[_-]?)?key(?:[_-]?id)?\s*[:=]\s*['\"]?[A-Za-z0-9/+=_-]{16,}['\"]?",
+        r"(?i)\baws[_-]?(?:secret[_-]?)?(?:access[_-]?)?key(?:[_-]?id)?\s*[:=]\s*['\"]?(?P<secret>[A-Za-z0-9/+=_-]{16,})['\"]?",
         SEVERITY_MEDIUM,
         "Heuristic: long value assigned to AWS credential variable (format not verified)",
     ),
@@ -97,14 +97,14 @@ DEFAULT_RULES: list[Rule] = [
     _rule(
         "password-assignment",
         "Password Assignment",
-        r"(?i)(?:^|[^A-Za-z0-9])(?:password|passwd|pass|pwd)\s*[:=]\s*['\"]?[^'\"\s]{4,}['\"]?",
+        r"(?i)(?:^|[^A-Za-z0-9])(?:password|passwd|pass|pwd)\s*[:=]\s*['\"]?(?P<secret>[^'\"\s]{4,})['\"]?",
         SEVERITY_HIGH,
         "Hard-coded password in an assignment",
     ),
     _rule(
         "api-key-assignment",
         "API Key Assignment",
-        r"(?i)(?:^|[^A-Za-z0-9])(?:api[_-]?key|apikey|secret|access[_-]?key|access[_-]?token|token|client[_-]?secret)\s*[:=]\s*['\"]?[^'\"\s]{8,}['\"]?",
+        r"(?i)(?:^|[^A-Za-z0-9])(?:api[_-]?key|apikey|secret|access[_-]?key[_-]?id|access[_-]?key|access[_-]?token|token|client[_-]?secret)\s*[:=]\s*['\"]?(?P<secret>[^'\"\s]{8,})['\"]?",
         SEVERITY_HIGH,
         "Hard-coded API key/secret/token in an assignment",
     ),

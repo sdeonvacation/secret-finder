@@ -110,6 +110,32 @@ def test_api_key_assignment_unquoted_high_severity():
     assert rule.severity == "high"
 
 
+def test_api_key_assignment_matches_aws_access_key_id():
+    # regression: README claims AWS_ACCESS_KEY_ID=… hits the explicit rule;
+    # `_ID` between `key` and `=` used to break the keyword match.
+    pattern = re.compile(rule_by_id(DEFAULT_RULES, "api-key-assignment").regex)
+    assert pattern.search("AWS_ACCESS_KEY_ID=" + "A" * 16)
+    assert pattern.search("AWS_ACCESS_KEY=" + "A" * 16)  # shorter keyword still ok
+    assert not pattern.search("AWS_ACCESS_KEY_ID=" + "A" * 7)  # value < 8
+    assert not pattern.search("MY_ACCESS_THING=abcdefghijklmnopqrst")
+
+
+def test_secret_named_group_only_on_assignment_rules():
+    with_secret = {
+        r.id for r in DEFAULT_RULES if "secret" in re.compile(r.regex).groupindex
+    }
+    assert with_secret == {
+        "password-assignment",
+        "api-key-assignment",
+        "aws-secret-key",
+        "aws-credential-var",
+    }
+    # spot-check: non-assignment rules keep the group(0) fallback path
+    for rid in ("aws-access-key", "jwt"):
+        groups = re.compile(rule_by_id(DEFAULT_RULES, rid).regex).groupindex
+        assert "secret" not in groups
+
+
 # Required behavior table: keyword boundary (prefix) + expanded keyword set.
 ASSIGNMENT_BEHAVIOR_TABLE = [
     ('jobhunter_pass = "hallelujah"', "password-assignment"),

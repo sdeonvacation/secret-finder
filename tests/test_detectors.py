@@ -101,8 +101,40 @@ def test_regex_detector_finds_aws_pem_password():
     assert f.rule == "password-assignment"
     assert f.severity == SEVERITY_HIGH
     assert f.reason == "Hard-coded password in an assignment"
-    assert f.secret_preview == "pass" + "*" * 19
-    assert matched == {PASSWORD_LINE}
+    # preview masks the VALUE ("hunter2xyz"), not the assignment fragment
+    assert f.secret_preview == mask_secret("hunter2xyz")  # "hunt" + "*" * 6
+    assert f.secret_preview == "hunt" + "*" * 6
+    assert matched == {PASSWORD_LINE}  # group(0) (whole fragment) unchanged
+
+
+def test_regex_detector_previews_masked_value_not_fragment():
+    det = RegexDetector(list(DEFAULT_RULES))
+    findings, matched = det.scan(
+        AddedLine("src/app.py", 1, 'jobhunter_pass = "hallelujah"')
+    )
+    assert len(findings) == 1
+    f = findings[0]
+    assert f.rule == "password-assignment"
+    assert f.secret_preview == mask_secret("hallelujah")  # "hall" + "*" * 6
+    assert f.secret_preview == "hall" + "*" * 6
+    # must not be a masked VAR-NAME/fragment start (the old whole-match bug)
+    assert not f.secret_preview.startswith(("job", "_pass", "pass"))
+    # group(0) unchanged: boundary `_` + assignment fragment (preview differs)
+    assert matched == {'_pass = "hallelujah"'}
+
+
+def test_regex_detector_catches_aws_access_key_id_value_preview():
+    config = load_config(None)  # DEFAULT_RULES + default entropy
+    value = "abcdefghijklmnop"  # 16 chars: >=8 assignment, >=16 heuristic
+    line = AddedLine("src/app.py", 1, f"AWS_ACCESS_KEY_ID={value}")
+    findings = DetectionPipeline(config).run([line])
+    # explicit api-key-assignment (high) beats the aws-credential-var heuristic
+    assert [f.rule for f in findings] == ["api-key-assignment"]
+    f = findings[0]
+    assert f.severity == SEVERITY_HIGH
+    assert f.secret_preview == mask_secret(value)  # "abcd" + "*" * 12
+    assert f.secret_preview == "abcd" + "*" * 12
+    assert not f.secret_preview.startswith("AWS")  # value, not var name
 
 
 def test_regex_detector_near_miss_yields_nothing():
@@ -302,6 +334,24 @@ def test_pipeline_password_assignment_wins_over_entropy():
     # ...but regex wins: exactly one finding, no entropy duplicate.
     findings = DetectionPipeline(config).run([line])
     assert [f.rule for f in findings] == ["password-assignment"]
+
+
+def test_pipeline_api_key_assignment_beats_entropy_for_long_random_value():
+    config = load_config(None)
+    value = HIGH_ENTROPY_TOKEN_40  # 40-char high-entropy literal, H ≈ 5.32
+    assert len(value) == 40
+    assert shannon_entropy(value) >= config.entropy_threshold  # self-validating
+    line = AddedLine("src/app.py", 1, f"api_key = {value}")
+    # non-vacuous control: entropy alone WOULD flag this value...
+    control = EntropyDetector(
+        config.entropy_threshold, config.entropy_min_length, config.entropy_allowlist
+    )
+    assert len(control.scan(line, exclude=set())) == 1
+    # ...but the explicit rule claims it: suppression, not silence.
+    findings = DetectionPipeline(config).run([line])
+    assert [f.rule for f in findings] == ["api-key-assignment"]
+    assert findings[0].severity == SEVERITY_HIGH
+    assert findings[0].secret_preview == mask_secret(value)
 
 
 def test_pipeline_dedupes_same_file_line_rule():

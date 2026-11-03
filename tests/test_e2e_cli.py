@@ -215,7 +215,7 @@ def test_working_tree_text_output(git_repo: Path) -> None:
     target.parent.mkdir()
     target.write_text(WORKING_TREE_CONTENT, encoding="utf-8")
 
-    proc = run_cli(cwd=git_repo)
+    proc = run_cli("--text", cwd=git_repo)
     assert proc.returncode == 1
     assert WORKING_TREE_REL in proc.stdout  # grouped by file
     assert "AWS access key ID" in proc.stdout  # documented rule reason (HLD §6)
@@ -320,19 +320,19 @@ def test_commit_mode_merge_commit_reports_secret(git_repo: Path) -> None:
 # --- 5. clean-change negative ----------------------------------------------
 
 
-@pytest.mark.parametrize("as_json", [False, True], ids=["text", "json"])
-def test_clean_working_tree_exits_zero(git_repo: Path, as_json: bool) -> None:
+@pytest.mark.parametrize("mode", ["default", "text", "json"])
+def test_clean_working_tree_exits_zero(git_repo: Path, mode: str) -> None:
     (git_repo / "benign.txt").write_text("x = 1\n", encoding="utf-8")
 
-    args = ("--json",) if as_json else ()
+    args = {"default": (), "text": ("--text",), "json": ("--json",)}[mode]
     proc = run_cli(*args, cwd=git_repo)
     assert proc.returncode == 0
-    if as_json:
+    if mode == "text":
+        assert "No secrets found." in proc.stdout
+    else:
         doc = parse_json_output(proc)
         assert doc["findings"] == []
         assert doc["summary"]["total"] == 0
-    else:
-        assert "No secrets found." in proc.stdout
 
 
 # --- 6. entropy context gate (credential-name required) ---------------------
@@ -594,26 +594,46 @@ def test_error_diff_and_commit_are_mutually_exclusive(tmp_path: Path) -> None:
     assert proc.stdout.strip() == ""
 
 
-# --- 11. --json stdout purity ----------------------------------------------
+# --- 11. default JSON / --text output modes --------------------------------
+
+
+def test_default_output_is_json_without_chatter(git_repo: Path) -> None:
+    """JSON is the default format: a bare invocation emits one JSON document
+    on stdout and stays silent on stderr (chatter is a --text-mode concern)."""
+    (git_repo / "sec.txt").write_text(f'aws = "{AWS_KEY}"\n', encoding="utf-8")
+
+    proc = run_cli(cwd=git_repo)  # no output flags at all
+    assert proc.returncode == 1
+    doc = parse_json_output(proc)
+    assert doc["summary"]["total"] >= 1
+    assert proc.stderr.strip() == "", "default (JSON) success must not chatter"
+    assert_no_raw_secrets(proc, AWS_KEY)
+
+
+def test_text_and_json_flags_are_mutually_exclusive(tmp_path: Path) -> None:
+    proc = run_cli("--text", "--json", cwd=tmp_path)
+    assert proc.returncode == 2
+    assert proc.stderr.strip()
 
 
 def test_json_stdout_purity_with_stderr_chatter(git_repo: Path) -> None:
     (git_repo / "sec.txt").write_text(f'aws = "{AWS_KEY}"\n', encoding="utf-8")
 
-    # Chatter exists and is routed to stderr (findings stay on stdout);
-    # --quiet suppresses the non-error chatter without touching stdout.
-    text_proc = run_cli(cwd=git_repo)
+    # --text: human output on stdout with summary chatter on stderr;
+    # --text --quiet suppresses the chatter without touching stdout.
+    text_proc = run_cli("--text", cwd=git_repo)
     assert text_proc.returncode == 1
     assert text_proc.stdout.strip()
-    assert text_proc.stderr.strip(), "default mode emits chatter on stderr"
+    assert text_proc.stderr.strip(), "--text mode emits chatter on stderr"
 
-    quiet_proc = run_cli("--quiet", cwd=git_repo)
+    quiet_proc = run_cli("--text", "--quiet", cwd=git_repo)
     assert quiet_proc.returncode == 1
     assert quiet_proc.stderr.strip() == ""
     assert quiet_proc.stdout == text_proc.stdout
 
-    # --json: the whole stdout parses as one JSON document (no chatter or
-    # diagnostics leaked onto it), and the JSON payload never appears on stderr.
+    # --json (compat no-op, identical to default): the whole stdout parses as
+    # one JSON document (no chatter or diagnostics leaked onto it), and the
+    # JSON payload never appears on stderr.
     json_proc = run_cli("--json", cwd=git_repo)
     assert json_proc.returncode == 1
     doc = parse_json_output(json_proc)
