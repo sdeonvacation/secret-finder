@@ -1,6 +1,6 @@
 # secret-finder
 
-A zero-dependency Python CLI that scans git changes for leaked passwords, keys, and other secrets before they land in a branch. It normalizes three input modes (working tree, git patch file/stdin, single commit) into a stream of added lines, runs named regex rules first and Shannon-entropy detection second, and reports findings as `file:line` with a short reason — as stable JSON by default, or human-readable text with `--text` — with CI-friendly exit codes.
+A zero-dependency Python CLI that scans git changes for leaked passwords, keys, and other secrets before they land in a branch. It normalizes three input modes (working tree, git patch file/stdin, single commit) into a stream of added lines, runs named regex rules first and Shannon-entropy detection second, and reports each finding with file, line, severity, rule, and a short reason — as stable JSON by default, or human-readable text with `--text` — with CI-friendly exit codes.
 
 ## Install
 
@@ -42,12 +42,6 @@ Scan the diff introduced by a specific commit:
 
 ```sh
 secret-finder --commit a1b2c3d
-```
-
-Explicit JSON output — optional; identical to the default, kept for compatibility with existing scripts:
-
-```sh
-secret-finder --json
 ```
 
 Load and override rules from a JSON config file:
@@ -93,7 +87,7 @@ JSON output (the default; `--json` is a compatibility no-op) follows a fixed sch
 
 - `rule` is the matched rule id, or `"entropy"` for entropy-only findings.
 - `severity` is one of `high`, `medium`, `low`.
-- `secret_preview` is always masked (first 4 characters + `*`); the raw secret is never printed.
+- `secret_preview` is a masked preview of the credential VALUE for assignment rules (named `(?P<secret>…)` capture — e.g. `jobhunter_pass = "hallelujah"` previews the password, not the variable name), or the masked full match for token-style rules; first 4 characters + `*`, fully masked (`*` only) when ≤ 8 characters; the raw secret is never printed.
 - `findings` are ordered by severity (high → medium → low), then file, then line.
 
 ## Rules & config
@@ -107,10 +101,10 @@ Detection precedence: **regex rules win**. The entropy pass is a secondary signa
 - GitHub and Slack tokens
 - JWTs
 - `password-assignment`: keywords `password` / `passwd` / `pass` / `pwd` followed by `[:=]` and a value of ≥ 4 chars (quotes optional, so `.env`/yaml-style `password = "..."` or `password = ...` both match) — `user_pass = "test"` flags
-- `api-key-assignment`: keywords `api_key` / `apikey` / `secret` / `access_key` / `access_token` / `token` / `client_secret` followed by `[:=]` and a value of ≥ 8 chars (quotes optional)
+- `api-key-assignment`: keywords `api_key` / `apikey` / `secret` / `access_key_id` / `access_key` / `access_token` / `token` / `client_secret` followed by `[:=]` and a value of ≥ 8 chars (quotes optional)
 - Assignment keywords are prefix-boundary `(?:^|[^A-Za-z0-9])`: `jobhunter_pass = "…"` flags (prefix `_`), while `compass = "north"` does not (`pass` embedded in a word)
 - Connection strings with embedded credentials
-- `aws-credential-var` heuristic: `AWS_ACCESS_KEY=` / `AWS_SECRET_ACCESS_KEY=` / `AWS_ACCESS_KEY_ID=` with a value ≥ 16 chars (format NOT verified — see Confidence tiers). `AWS_ACCESS_KEY=<16+>` now matches `api-key-assignment` (high) instead, which suppresses this Tier-3 heuristic on that line; the heuristic still fires where no primary assignment rule matches, e.g. `aws_secret_key=<16+>` or `AWS_ACCESS_KEY_ID=<16+>`
+- `aws-credential-var` heuristic: `AWS_ACCESS_KEY=` / `AWS_SECRET_ACCESS_KEY=` / `AWS_ACCESS_KEY_ID=` with a value ≥ 16 chars (format NOT verified — see Confidence tiers). `AWS_ACCESS_KEY=<16+>` now matches `api-key-assignment` (high) instead, which suppresses this Tier-3 heuristic on that line; the heuristic fires only where no primary assignment rule matches the line, e.g. `aws_secret_key=<16+>` or `aws_key=<16+>`
 
 Severity notes: `password-assignment` is `high`; `api-key-assignment` severity is now **`high`** (raised from `medium`). JWT stays `medium`.
 
@@ -118,7 +112,7 @@ Severity notes: `password-assignment` is `high`; `api-key-assignment` severity i
 
 Findings fall into three tiers, which drive both severity and output ordering (highest-confidence first):
 
-- **Tier 1 — high-confidence assignments.** `password-assignment`: `password` / `passwd` / `pass` / `pwd` with a value ≥ 4 chars; `api-key-assignment`: `api_key` / `apikey` / `secret` / `access_key` / `access_token` / `token` / `client_secret` with a value ≥ 8 chars (quotes optional, works in `.env`/yaml style). Both rules severity `high`.
+- **Tier 1 — high-confidence assignments.** `password-assignment`: `password` / `passwd` / `pass` / `pwd` with a value ≥ 4 chars; `api-key-assignment`: `api_key` / `apikey` / `secret` / `access_key_id` / `access_key` / `access_token` / `token` / `client_secret` with a value ≥ 8 chars (quotes optional, works in `.env`/yaml style). Both rules severity `high`.
 - **Tier 2 — recognisable credentials.** AWS access key IDs (`AKIA…`), AWS secret assignments, PEM private-key headers, GitHub/Slack tokens, connection strings — all severity `high`. JWT stays `medium` (well-defined but common in fixtures).
 - **Tier 3 — potentially random credentials / heuristics.** Severity `medium`, explicitly a **secondary heuristic, not proof**. Includes the `aws-credential-var` rule (value ≥ 16 chars, format NOT verified) and entropy findings (rule `entropy`, "possible secret" — credential-context gated, see Entropy defaults). A Tier 3 rule finding is suppressed on any line where a Tier 1/2 regex rule already matched, so a primary rule's precise reason wins — e.g. `AWS_ACCESS_KEY=<16+>` reports `api-key-assignment` (high), not `aws-credential-var`.
 
@@ -148,7 +142,7 @@ Pass a JSON file with `--rules <path>`:
 }
 ```
 
-Rule fields: `id`, `name`, `regex`, `severity`, `reason`, plus optional `path_allowlist` (globs to skip) and `entropy_floor` (optional secondary gate).
+Rule fields: `id`, `name`, `regex`, `severity`, `reason`, plus optional `path_allowlist` (globs to skip) and `entropy_floor` (optional secondary gate). A named `(?P<secret>…)` group inside a custom rule's `regex` controls which part becomes `secret_preview` (rules without it mask the full match).
 
 ### Merge semantics
 
@@ -201,3 +195,5 @@ python -m pytest
 ```
 
 Project layout: `src/secret_finder/` (CLI, input adapters, rules, entropy, detectors, reporters), `tests/` for unit, integration, and CLI tests, with `design/`, `plans/`, and `requirements/` documenting the spec.
+
+`AI_PROMPTS.txt` is the transcript of this project's AI-assisted build — every prompt and question that shaped it, in chronological order.
