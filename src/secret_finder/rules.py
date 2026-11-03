@@ -97,14 +97,14 @@ DEFAULT_RULES: list[Rule] = [
     _rule(
         "password-assignment",
         "Password Assignment",
-        r"(?i)(?:password|passwd|pwd)\s*[:=]\s*['\"]?[^'\"\s]{6,}['\"]?",
+        r"(?i)(?:^|[^A-Za-z0-9])(?:password|passwd|pass|pwd)\s*[:=]\s*['\"]?[^'\"\s]{4,}['\"]?",
         SEVERITY_HIGH,
         "Hard-coded password in an assignment",
     ),
     _rule(
         "api-key-assignment",
         "API Key Assignment",
-        r"(?i)(?:api[_-]?key|apikey|secret|access[_-]?token|token)\s*[:=]\s*['\"]?[^'\"\s]{8,}['\"]?",
+        r"(?i)(?:^|[^A-Za-z0-9])(?:api[_-]?key|apikey|secret|access[_-]?key|access[_-]?token|token|client[_-]?secret)\s*[:=]\s*['\"]?[^'\"\s]{8,}['\"]?",
         SEVERITY_HIGH,
         "Hard-coded API key/secret/token in an assignment",
     ),

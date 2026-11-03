@@ -90,7 +90,7 @@ JSON output (`--json`) follows a fixed schema:
 
 ## Rules & config
 
-Detection precedence: **regex rules win**. The entropy pass only flags novel high-entropy strings that were not already matched by a rule, so known shapes always get a precise reason.
+Detection precedence: **regex rules win**. The entropy pass is a secondary signal for values associated with credential-like names: it flags a candidate only when the same line binds it to a credential-like name in assignment position, and only for candidates not already matched by a rule, so known shapes always get a precise reason.
 
 ### Built-in rule categories
 
@@ -98,9 +98,11 @@ Detection precedence: **regex rules win**. The entropy pass only flags novel hig
 - PEM private key blocks
 - GitHub and Slack tokens
 - JWTs
-- `password` / `api_key` / `secret` / `access_token` assignments (quotes now optional, so `.env`/yaml-style `password = "..."` or `password = ...` both match)
+- `password-assignment`: keywords `password` / `passwd` / `pass` / `pwd` followed by `[:=]` and a value of ≥ 4 chars (quotes optional, so `.env`/yaml-style `password = "..."` or `password = ...` both match) — `user_pass = "test"` flags
+- `api-key-assignment`: keywords `api_key` / `apikey` / `secret` / `access_key` / `access_token` / `token` / `client_secret` followed by `[:=]` and a value of ≥ 8 chars (quotes optional)
+- Assignment keywords are prefix-boundary `(?:^|[^A-Za-z0-9])`: `jobhunter_pass = "…"` flags (prefix `_`), while `compass = "north"` does not (`pass` embedded in a word)
 - Connection strings with embedded credentials
-- `aws-credential-var` heuristic: `AWS_ACCESS_KEY=` / `AWS_SECRET_ACCESS_KEY=` / `AWS_ACCESS_KEY_ID=` with a value ≥ 16 chars (format NOT verified — see Confidence tiers)
+- `aws-credential-var` heuristic: `AWS_ACCESS_KEY=` / `AWS_SECRET_ACCESS_KEY=` / `AWS_ACCESS_KEY_ID=` with a value ≥ 16 chars (format NOT verified — see Confidence tiers). `AWS_ACCESS_KEY=<16+>` now matches `api-key-assignment` (high) instead, which suppresses this Tier-3 heuristic on that line; the heuristic still fires where no primary assignment rule matches, e.g. `aws_secret_key=<16+>` or `AWS_ACCESS_KEY_ID=<16+>`
 
 Severity notes: `password-assignment` is `high`; `api-key-assignment` severity is now **`high`** (raised from `medium`). JWT stays `medium`.
 
@@ -108,9 +110,9 @@ Severity notes: `password-assignment` is `high`; `api-key-assignment` severity i
 
 Findings fall into three tiers, which drive both severity and output ordering (highest-confidence first):
 
-- **Tier 1 — high-confidence assignments.** `password = "..."`, `api_key = "..."`, `secret = "..."`, `access_token = "..."` (quotes optional, works in `.env`/yaml style). Rules `password-assignment` and `api-key-assignment`, both severity `high`.
+- **Tier 1 — high-confidence assignments.** `password-assignment`: `password` / `passwd` / `pass` / `pwd` with a value ≥ 4 chars; `api-key-assignment`: `api_key` / `apikey` / `secret` / `access_key` / `access_token` / `token` / `client_secret` with a value ≥ 8 chars (quotes optional, works in `.env`/yaml style). Both rules severity `high`.
 - **Tier 2 — recognisable credentials.** AWS access key IDs (`AKIA…`), AWS secret assignments, PEM private-key headers, GitHub/Slack tokens, connection strings — all severity `high`. JWT stays `medium` (well-defined but common in fixtures).
-- **Tier 3 — potentially random credentials / heuristics.** Severity `medium`, explicitly a **secondary heuristic, not proof**. Includes the `aws-credential-var` rule (value ≥ 16 chars, format NOT verified) and entropy findings (rule `entropy`, "possible secret" signals). A Tier 3 rule finding is suppressed on any line where a Tier 1/2 regex rule already matched, so a primary rule's precise reason wins.
+- **Tier 3 — potentially random credentials / heuristics.** Severity `medium`, explicitly a **secondary heuristic, not proof**. Includes the `aws-credential-var` rule (value ≥ 16 chars, format NOT verified) and entropy findings (rule `entropy`, "possible secret" — credential-context gated, see Entropy defaults). A Tier 3 rule finding is suppressed on any line where a Tier 1/2 regex rule already matched, so a primary rule's precise reason wins — e.g. `AWS_ACCESS_KEY=<16+>` reports `api-key-assignment` (high), not `aws-credential-var`.
 
 ### Config file format
 
@@ -152,7 +154,13 @@ Rule fields: `id`, `name`, `regex`, `severity`, `reason`, plus optional `path_al
 
 - `threshold = 4.5` (raw Shannon entropy in bits per character), `min_length = 16` (a length floor); both tunable via the `entropy` block.
 - Default allowlist suppresses high-entropy-but-benign strings: sha1 (`[0-9a-f]{40}`), sha256 (`[0-9a-f]{64}`), and UUIDs.
-- A candidate is flagged only when raw Shannon entropy `H ≥ threshold` (4.5 bits/char), length ≥ `min_length`, not on the allowlist, and not already matched by a regex rule. A 16-char string can reach at most `H = 4.0`, so `min_length` alone never satisfies the gate.
+- The entropy pass is a **secondary signal for values associated with credential-like names**. A candidate is flagged only when raw Shannon entropy `H ≥ threshold` (4.5 bits/char), length ≥ `min_length`, not on the allowlist, not already matched by a regex rule, **and** the same line matches the credential-context pattern — a credential-like name in assignment position (the optional closing quote supports JSON keys):
+
+  ```
+  (?:^|[^A-Za-z0-9])(?:password|passwd|pass|pwd|secret|token|api[_-]?key|access[_-]?key|client[_-]?secret)['\"]?\s*[:=]
+  ```
+
+  Context-free flagging of any ≥16-char high-entropy string anywhere is deliberately removed (it FP'd IDE workspace.xml `id=`/`value=` attributes). A 16-char string can reach at most `H = 4.0`, so `min_length` alone never satisfies the gate.
 
 ## Exit codes
 
@@ -166,13 +174,13 @@ Stderr carries diagnostics; stdout carries only findings, so `--json` output sta
 
 ## Where it fails
 
-- **Entropy false positives.** Minified JavaScript, base64 blobs, and other dense data can trip the entropy pass. Tune `entropy.threshold`, raise `min_length`, add paths to `ignore_paths`, or extend the entropy `allowlist`. The entropy pass does not consult per-rule `path_allowlist`.
-- **Heuristic rules flag placeholders too.** Tier 3 rules only check shape, not validity: `AWS_ACCESS_KEY=your_access_key_here` (≥ 16 chars) matches `aws-credential-var` even though it is a placeholder. These are secondary heuristics, not proof — verify before treating them as real secrets.
-- **Entropy needs long, high-entropy values.** Candidates must be ≥ 16 chars with raw entropy `H ≥ 4.5`. Candidate extraction splits on `=`, so a `.env` line's `NAME=value` scores the value alone (the name no longer dilutes the score) — but low-entropy values still won't fire entropy.
+- **Entropy false positives.** Context-free entropy flagging (any ≥16-char high-entropy string anywhere) is gone by design — it FP'd IDE workspace.xml `id=`/`value=` attributes, which no longer flag on entropy alone. Keyword rules still scan XML, so `password="..."` attributes still flag via `password-assignment` and don't need `ignore_paths`. What remains can still FP when dense data shares a line with a credential-like name: minified JavaScript or base64 blobs next to `token=`/`secret=`-style names. Tune `entropy.threshold`, raise `min_length`, add paths to `ignore_paths`, or extend the entropy `allowlist`. The entropy pass does not consult per-rule `path_allowlist`.
+- **Heuristic rules flag placeholders too.** Rules only check shape, not validity: `AWS_ACCESS_KEY=your_access_key_here` (≥ 16 chars) is reported as `api-key-assignment` (high) even though it is a placeholder, and where no primary rule matches the line, `aws-credential-var` fires on any ≥ 16-char value (e.g. `aws_secret_key=<placeholder>`). These are secondary/shape-only signals — verify before treating them as real secrets.
+- **Entropy needs long, high-entropy values bound to credential-like names.** Candidates must be ≥ 16 chars with raw entropy `H ≥ 4.5` on a line matching the credential-context pattern (a credential-like name in assignment position). Candidate extraction splits on `=`, so a `.env` line's `NAME=value` scores the value alone (the name no longer dilutes the score) — but low-entropy values still won't fire entropy.
 - **Generated UUIDs and hashes.** Long hex or random-looking strings (checksums, build IDs) are high-entropy by nature. The default allowlist covers sha1/sha256/UUID shapes, but repo-specific hashes may still need allowlisting.
 - **Secrets already in history are not found.** Only new/changed added lines are scanned — this is not a full-history audit. Use `--commit` to check one commit, or diff against an older ref, but pre-existing secrets in untouched lines are out of scope.
 - **Binary and unusual encodings are skipped.** Binary files are detected and skipped entirely; secrets in non-UTF-8 or exotic encodings may not be tokenized correctly.
-- **Novel secret shapes need a rule.** Regex cannot catch a token format it has never seen; entropy is the only fallback, and only for long, high-entropy candidates. Add a rule via `--rules` for new shapes.
+- **Novel secret shapes need a rule.** Regex cannot catch a token format it has never seen; entropy is the only fallback, and only for long, high-entropy values whose lines carry a credential-like name in assignment position. Add a rule via `--rules` for new shapes.
 - **Entropy threshold may need per-repo tuning.** A threshold that works on one codebase can be too aggressive or too lax on another (e.g. heavy crypto, generated code).
 - **Lockfiles and checksum-heavy files** are common false-positive sources. Extend `ignore_paths` with your lockfiles (`*.lock`, `go.sum`, `package-lock.json`, etc.).
 

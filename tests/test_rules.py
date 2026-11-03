@@ -96,8 +96,8 @@ def test_password_assignment_quotes_are_optional():
     pattern = re.compile(rule_by_id(DEFAULT_RULES, "password-assignment").regex)
     assert pattern.search("password=hunter2supersecret")  # unquoted (.env style)
     assert pattern.search('password = "hunter2secret"')  # quoted regression
-    assert not pattern.search("password=abc")  # value < 6 chars
-    assert not pattern.search('password: "abc"')  # quoted but value < 6 chars
+    assert not pattern.search("password=abc")  # value < 4 chars
+    assert not pattern.search('password: "abc"')  # quoted but value < 4 chars
 
 
 def test_api_key_assignment_unquoted_high_severity():
@@ -108,6 +108,36 @@ def test_api_key_assignment_unquoted_high_severity():
     assert pattern.search("api_key=xyz123456789")
     assert not pattern.search("max_token=2048")  # value < 8 chars
     assert rule.severity == "high"
+
+
+# Required behavior table: keyword boundary (prefix) + expanded keyword set.
+ASSIGNMENT_BEHAVIOR_TABLE = [
+    ('jobhunter_pass = "hallelujah"', "password-assignment"),
+    ('db_password = "abc123"', "password-assignment"),
+    ('MY_API_KEY="xyz12345"', "api-key-assignment"),
+    ('access_token = "eyJhbGci..."', "api-key-assignment"),
+    ('user_pass = "test"', "password-assignment"),
+    ('compass = "north"', None),
+]
+
+
+@pytest.mark.parametrize("line,expected_id", ASSIGNMENT_BEHAVIOR_TABLE)
+def test_assignment_rule_keyword_matching_table(line, expected_id):
+    if expected_id is not None:
+        rule = rule_by_id(DEFAULT_RULES, expected_id)
+        assert re.compile(rule.regex).search(line), (
+            f"{expected_id} should match {line!r}"
+        )
+        return
+    # 'pass' is a substring of 'compass' — prefix boundary must reject it,
+    # and no other default rule may match either.
+    for rid in ("password-assignment", "api-key-assignment"):
+        rule = rule_by_id(DEFAULT_RULES, rid)
+        assert not re.compile(rule.regex).search(line), (
+            f"{rid} should not match {line!r}"
+        )
+    matching = [r.id for r in DEFAULT_RULES if re.compile(r.regex).search(line)]
+    assert matching == [], f"no default rule should match {line!r}, got {matching}"
 
 
 def test_confidence_taxonomy_severities():

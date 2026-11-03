@@ -21,6 +21,7 @@ from secret_finder.models import (
 from secret_finder.rules import ConfigError, ScanConfig
 
 __all__ = [
+    "CREDENTIAL_CONTEXT_RE",
     "DetectionPipeline",
     "EntropyDetector",
     "HEURISTIC_RULE_IDS",
@@ -31,6 +32,12 @@ __all__ = [
 # Secondary heuristic rules (Tier 3, "not proof"): dropped on any line where a
 # primary (non-heuristic) regex rule already matched.
 HEURISTIC_RULE_IDS: frozenset[str] = frozenset({"aws-credential-var"})
+
+# Entropy pass gate: only lines assigning to a credential-like name may be
+# entropy-flagged (bounded keyword — `_` prefix ok, mid-word like `compass` no).
+CREDENTIAL_CONTEXT_RE = re.compile(
+    r"(?i)(?:^|[^A-Za-z0-9])(?:password|passwd|pass|pwd|secret|token|api[_-]?key|access[_-]?key|client[_-]?secret)['\"]?\s*[:=]"
+)
 
 
 def mask_secret(s: str) -> str:
@@ -104,6 +111,8 @@ class EntropyDetector:
                 ) from exc
 
     def scan(self, line: AddedLine, exclude: set[str]) -> list[Finding]:
+        if not CREDENTIAL_CONTEXT_RE.search(line.content):
+            return []
         findings: list[Finding] = []
         for candidate in extract_candidates(line.content, self._min_length):
             if candidate in exclude or is_allowlisted(candidate, self._allowlist):

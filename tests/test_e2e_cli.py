@@ -335,11 +335,25 @@ def test_clean_working_tree_exits_zero(git_repo: Path, as_json: bool) -> None:
         assert "No secrets found." in proc.stdout
 
 
-# --- 6. entropy allowlist negative -----------------------------------------
+# --- 6. entropy context gate (credential-name required) ---------------------
 
 
-def test_entropy_allowlist_suppresses_sha1(git_repo: Path) -> None:
-    (git_repo / "hashes.txt").write_text(f"checksum {SHA1_HEX}\n", encoding="utf-8")
+def test_entropy_requires_credential_context(git_repo: Path) -> None:
+    """Context-free high-entropy strings are never flagged: entropy is a
+    secondary signal only on credential-like names (post-workspace.xml fix).
+    The SHA-1 line also documents that allowlisting is now belt-and-braces —
+    the context gate alone suppresses it (unit tests cover allowlist proper)."""
+    from secret_finder.entropy import shannon_entropy
+
+    novel = "abcdefghijklmnopqrstuvwxyzABCDEF"  # H = 5.0, would pass the threshold
+    assert shannon_entropy(novel) >= 4.5  # precondition: fires if context present
+    # SHA-1 hex caps raw H at log2(16)=4.0 < 4.5, so the threshold already
+    # excludes it; the allowlist is defense-in-depth (unit-tested below 4.5).
+    (git_repo / "hashes.txt").write_text(
+        f"checksum {SHA1_HEX}\n"
+        f'option value="{novel}"\n',  # XML-ish name, no credential keyword
+        encoding="utf-8",
+    )
 
     proc = run_cli("--json", cwd=git_repo)
     assert proc.returncode == 0
@@ -348,12 +362,40 @@ def test_entropy_allowlist_suppresses_sha1(git_repo: Path) -> None:
     assert doc["summary"]["total"] == 0
 
 
+def test_idea_workspace_xml_fp_shapes_stay_silent(git_repo: Path) -> None:
+    """Regression for commit e548bf9: the two entropy false positives —
+    <component id=...> and <option value=...> in .idea/workspace.xml — must
+    produce zero findings, while the file itself is still scanned (not ignored)."""
+    from secret_finder.entropy import shannon_entropy
+
+    comp_id = "3LbTq7Xk9mP2rV5wY8zA1cD4eF"  # 26-char IDE-style component id
+    opt_value = "bundledPathValue0123456789AbCdEfGhIjKlMnOpQrStUvWxYz"
+    assert shannon_entropy(comp_id) >= 4.5  # both would pass the entropy
+    assert shannon_entropy(opt_value) >= 4.5  # threshold if ungated
+    xml = git_repo / ".idea"
+    xml.mkdir()
+    (xml / "workspace.xml").write_text(
+        '<?xml version="1.0"?>\n'
+        "<project>\n"
+        f'  <component name="ProjectManager" id="{comp_id}" />\n'
+        f'        <option value="{opt_value}" />\n'
+        "</project>\n",
+        encoding="utf-8",
+    )
+
+    proc = run_cli("--json", cwd=git_repo)
+    assert proc.returncode == 0
+    doc = parse_json_output(proc)
+    assert doc["findings"] == []
+
+
 def test_entropy_fires_at_default_config_on_novel_token(git_repo: Path) -> None:
-    """Full-stack guard for the raw-H gate: no built-in rule matches this line,
-    so the entropy pass alone must flag it under the default config (threshold 4.5).
-    Regression for the charset-normalized-vs-threshold bug that made entropy dead."""
+    """Full-stack guard for the raw-H gate WITH credential context: the line has
+    `token = ` context but an assignment-rule-incompatible value (`ab` < 8), so
+    the entropy pass alone must flag the separate high-entropy candidate at the
+    default threshold 4.5. Regression for the charset-normalized-vs-threshold bug."""
     token = "abcdefghijklmnopqrstuvwxyzABCDEF"  # 32 distinct chars -> H = 5.0 bits/char
-    (git_repo / "novel.txt").write_text(f'identifier = "{token}"\n', encoding="utf-8")
+    (git_repo / "novel.txt").write_text(f'token = "ab" {token}\n', encoding="utf-8")
 
     proc = run_cli("--json", cwd=git_repo)  # default config: no --rules
     assert proc.returncode == 1
@@ -380,9 +422,10 @@ AWS_SECRET_40 = "wJalrXUtnFEMI7KMDENGB" + "PxrEfCnXmQ9tL5vY2hK"  # exactly 40 ch
 PASSWORD_VALUE = "hunter2supersecret"
 
 
-def test_env_aws_var_heuristic_catches_incident(git_repo: Path) -> None:
-    """Regression for 'No secrets found' on commit 63f774c: Tier 3 heuristic
-    must flag a long value on an AWS credential variable, unquoted, .env style."""
+def test_env_access_key_assignment_catches_incident(git_repo: Path) -> None:
+    """Regression for 'No secrets found' on commit 63f774c. Since `access_key`
+    became a Tier-1 keyword, AWS_ACCESS_KEY=<22> flags as a high-confidence
+    assignment; the aws-credential-var heuristic is then suppressed (primary wins)."""
     assert len(ENV_INCIDENT_VALUE) == 22
     (git_repo / ".env").write_text(
         f"AWS_ACCESS_KEY={ENV_INCIDENT_VALUE}\n", encoding="utf-8"
@@ -392,13 +435,14 @@ def test_env_aws_var_heuristic_catches_incident(git_repo: Path) -> None:
     proc = run_cli("--commit", "HEAD", "--json", cwd=git_repo)
     assert proc.returncode == 1
     doc = parse_json_output(proc)
+    assert doc["summary"]["total"] == 1
 
-    hits = [f for f in doc["findings"] if f["rule"] == "aws-credential-var"]
-    assert len(hits) == 1
-    assert hits[0]["file"] == ".env"
-    assert hits[0]["line"] == 1
-    assert hits[0]["severity"] == "medium"
-    assert "Heuristic" in hits[0]["reason"]
+    hit = doc["findings"][0]
+    assert hit["rule"] == "api-key-assignment"
+    assert hit["file"] == ".env"
+    assert hit["line"] == 1
+    assert hit["severity"] == "high"
+    assert not [f for f in doc["findings"] if f["rule"] == "aws-credential-var"]
     assert_no_raw_secrets(proc, ENV_INCIDENT_VALUE)
 
 
@@ -417,9 +461,11 @@ def test_unquoted_password_assignment_is_high_confidence(git_repo: Path) -> None
 
 
 def test_findings_prioritized_high_before_heuristic(git_repo: Path) -> None:
-    """Tier order: high-confidence assignment precedes Tier 3 heuristic in JSON."""
+    """Tier order: high-confidence assignment precedes Tier 3 heuristic in JSON.
+    Line 2 uses `aws_secret_key` — a form the Tier-1 keywords do NOT cover
+    (secret is followed by `_key`, not `[:=]`), so the medium heuristic fires."""
     (git_repo / ".env").write_text(
-        f"password={PASSWORD_VALUE}\nAWS_ACCESS_KEY={ENV_INCIDENT_VALUE}\n",
+        f"password={PASSWORD_VALUE}\naws_secret_key = {ENV_INCIDENT_VALUE}\n",
         encoding="utf-8",
     )
     commit_all(git_repo)
@@ -427,6 +473,7 @@ def test_findings_prioritized_high_before_heuristic(git_repo: Path) -> None:
     proc = run_cli("--commit", "HEAD", "--json", cwd=git_repo)
     assert proc.returncode == 1
     doc = parse_json_output(proc)
+    assert doc["summary"]["total"] == 2
     rank = {"high": 0, "medium": 1, "low": 2}
     sev = [f["severity"] for f in doc["findings"]]
     assert sev == sorted(sev, key=rank.__getitem__)
@@ -435,8 +482,9 @@ def test_findings_prioritized_high_before_heuristic(git_repo: Path) -> None:
 
 
 def test_heuristic_suppressed_when_primary_matches_line(git_repo: Path) -> None:
-    """Tier 3 is secondary: canonical 40-char secret assignment yields only the
-    primary aws-secret-key finding — no aws-credential-var duplicate."""
+    """Tier 3 is secondary: canonical 40-char secret assignment is claimed by
+    primary rules (aws-secret-key via format, api-key-assignment via the
+    `access_key` keyword) — no aws-credential-var duplicate may appear."""
     assert len(AWS_SECRET_40) == 40
     (git_repo / ".env").write_text(
         f"AWS_SECRET_ACCESS_KEY={AWS_SECRET_40}\n", encoding="utf-8"
@@ -450,6 +498,38 @@ def test_heuristic_suppressed_when_primary_matches_line(git_repo: Path) -> None:
     assert "aws-secret-key" in rules_on_line
     assert "aws-credential-var" not in rules_on_line
     assert_no_raw_secrets(proc, AWS_SECRET_40)
+
+
+def test_user_keyword_behavior_table_end_to_end(git_repo: Path) -> None:
+    """The user-specified keyword behavior table, through the full CLI.
+    All values are <16 chars so entropy contributes nothing — flags come from
+    the assignment rules alone; `compass` must produce no finding at all."""
+    content = (
+        'jobhunter_pass = "hallelujah"\n'  # 1: pass keyword (prefix _) -> password rule
+        'db_password = "abc123"\n'  # 2: password keyword -> password rule
+        'MY_API_KEY="xyz12345"\n'  # 3: api_key keyword -> api-key rule
+        'access_token = "eyJhbGci..."\n'  # 4: token keyword -> api-key rule
+        'user_pass = "test"\n'  # 5: pass + 4-char value -> password rule (accepted FP)
+        'compass = "north"\n'  # 6: `pass` embedded in `compass` -> NO flag
+    )
+    (git_repo / "table.env").write_text(content, encoding="utf-8")
+    commit_all(git_repo, "keyword table")
+
+    proc = run_cli("--commit", "HEAD", "--json", cwd=git_repo)
+    assert proc.returncode == 1
+    doc = parse_json_output(proc)
+
+    by_line = {f["line"]: f["rule"] for f in doc["findings"]}
+    assert by_line == {
+        1: "password-assignment",
+        2: "password-assignment",
+        3: "api-key-assignment",
+        4: "api-key-assignment",
+        5: "password-assignment",
+    }  # line 6 (compass) deliberately absent — exact map, no extras
+    assert all(f["severity"] == "high" for f in doc["findings"])
+    assert doc["summary"] == {"total": 5, "high": 5, "medium": 0, "low": 0}
+    assert_no_raw_secrets(proc, "hallelujah", "abc123", "xyz12345", "test")
 
 
 # --- 7/8/9/10. error paths (exit 2) ----------------------------------------

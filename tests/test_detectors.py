@@ -3,6 +3,7 @@
 import pytest
 
 from secret_finder.detectors import (
+    CREDENTIAL_CONTEXT_RE,
     DetectionPipeline,
     EntropyDetector,
     RegexDetector,
@@ -26,6 +27,10 @@ SHA256 = "deadbeefcafebabe1234567890abcdef" * 2
 # 32 distinct chars → raw Shannon H = 5.0 ≥ default threshold 4.5
 HIGH_ENTROPY_TOKEN = "abcdefghijklmnopqrstuvwxyzABCDEF"
 HIGH_ENTROPY_TOKEN_2 = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdef"
+# all-distinct alnum runs for the context gate (raw H = log2(len))
+HIGH_ENTROPY_TOKEN_27 = "DxE6ZvocbX8Owkld2m19uzWhp7K"  # 27 distinct → H ≈ 4.75
+HIGH_ENTROPY_TOKEN_36 = "KwEmxJ8lcDzdyX2SCsjhruTt9U6bqgG7AivP"  # → H ≈ 5.17
+HIGH_ENTROPY_TOKEN_40 = "6lkN0rhEUxvWJOatR5V4YnAjpycQLiP9ZG7KBqzd"  # → H ≈ 5.32
 AWS_SECRET_40 = "wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY"  # classic 40-char key
 # 22 lowercase alnum, H ≈ 3.46 < 4.5 → entropy cannot flag it (self-validating)
 LOW_ENTROPY_VALUE = "aabbccddeeffgghhiijjkk"
@@ -104,7 +109,7 @@ def test_regex_detector_near_miss_yields_nothing():
     det = RegexDetector(list(DEFAULT_RULES))
     near_misses = [
         AddedLine("src/app.py", 1, "AKIA1234567890ABCDE"),  # 15, needs 16
-        AddedLine("src/app.py", 2, "password = abcd"),  # unquoted ok now, but 4 < 6
+        AddedLine("src/app.py", 2, "password = abc"),  # unquoted ok, but 3 < 4
         AddedLine("src/app.py", 3, "-----BEGIN RSA PUBLIC KEY-----"),  # not PRIVATE
     ]
     for line in near_misses:
@@ -167,7 +172,7 @@ def test_regex_detector_invalid_regex_raises_config_error():
 
 def test_entropy_detector_flags_high_entropy_novel_string():
     det = EntropyDetector(threshold=4.5, min_length=16, allowlist=[])
-    line = AddedLine("src/app.py", 1, f'const = "{HIGH_ENTROPY_TOKEN}"')
+    line = AddedLine("src/app.py", 1, f'token = "{HIGH_ENTROPY_TOKEN}"')
     findings = det.scan(line, exclude=set())
     assert len(findings) == 1
     f = findings[0]
@@ -180,13 +185,13 @@ def test_entropy_detector_flags_high_entropy_novel_string():
 
 def test_entropy_detector_skips_excluded_candidate():
     det = EntropyDetector(threshold=4.5, min_length=16, allowlist=[])
-    line = AddedLine("src/app.py", 1, f'k = "{HIGH_ENTROPY_TOKEN}"')
+    line = AddedLine("src/app.py", 1, f'token = "{HIGH_ENTROPY_TOKEN}"')
     assert len(det.scan(line, exclude={HIGH_ENTROPY_TOKEN})) == 0
     assert len(det.scan(line, exclude=set())) == 1  # non-vacuous control
 
 
 def test_entropy_detector_skips_allowlisted_sha256():
-    line = AddedLine("src/app.py", 1, f'hash = "{SHA256}"')
+    line = AddedLine("src/app.py", 1, f'api_key = "{SHA256}"')
     # hex strings cap at H = log2(16) = 4.0; SHA256's raw H ≈ 3.66 ≥ 3.5
     assert len(EntropyDetector(3.5, 16, []).scan(line, exclude=set())) == 1
     det = EntropyDetector(threshold=3.5, min_length=16, allowlist=[r"[0-9a-f]{64}"])
@@ -199,8 +204,70 @@ def test_entropy_detector_invalid_allowlist_pattern_raises():
     assert "[0-9a-f" in str(exc.value)
 
 
+def test_credential_context_regex_bounds():
+    assert CREDENTIAL_CONTEXT_RE.search("x = 1") is None
+    assert CREDENTIAL_CONTEXT_RE.search("compass = 'x'") is None  # mid-word
+    assert CREDENTIAL_CONTEXT_RE.search("_secret: 1") is not None  # `_` prefix
+    assert CREDENTIAL_CONTEXT_RE.search('password = "x"') is not None
+    assert CREDENTIAL_CONTEXT_RE.search('"api_key": "x"') is not None
+    assert CREDENTIAL_CONTEXT_RE.search("session_secret = x") is not None
+
+
+def test_entropy_gate_rejects_xml_component_id_without_context():
+    det = EntropyDetector(threshold=4.5, min_length=16, allowlist=[])
+    assert shannon_entropy(HIGH_ENTROPY_TOKEN_27) >= 4.5  # self-validating
+    line = AddedLine(
+        ".idea/workspace.xml",
+        17,
+        f'<component name="comp" id="{HIGH_ENTROPY_TOKEN_27}"/>',
+    )
+    assert det.scan(line, exclude=set()) == []
+    # non-vacuous: same token fires once credential context exists
+    ctrl = AddedLine("src/app.py", 1, f"session_secret = {HIGH_ENTROPY_TOKEN_27}")
+    assert len(det.scan(ctrl, exclude=set())) == 1
+
+
+def test_entropy_gate_rejects_xml_option_value_without_context():
+    det = EntropyDetector(threshold=4.5, min_length=16, allowlist=[])
+    assert shannon_entropy(HIGH_ENTROPY_TOKEN_40) >= 4.5  # self-validating
+    line = AddedLine(
+        ".idea/workspace.xml",
+        39,
+        f'<option value="{HIGH_ENTROPY_TOKEN_40}"/>',
+    )
+    assert det.scan(line, exclude=set()) == []
+    # non-vacuous: same token fires once credential context exists
+    ctrl = AddedLine("src/app.py", 1, f"session_secret = {HIGH_ENTROPY_TOKEN_40}")
+    assert len(det.scan(ctrl, exclude=set())) == 1
+
+
+def test_entropy_gate_rejects_context_free_identifier_assignment():
+    det = EntropyDetector(threshold=4.5, min_length=16, allowlist=[])
+    assert shannon_entropy(HIGH_ENTROPY_TOKEN) >= 4.5  # self-validating
+    line = AddedLine("src/app.py", 1, f'identifier = "{HIGH_ENTROPY_TOKEN}"')
+    assert det.scan(line, exclude=set()) == []
+
+
+def test_entropy_gate_fires_on_session_secret_assignment():
+    det = EntropyDetector(threshold=4.5, min_length=16, allowlist=[])
+    line = AddedLine("src/app.py", 1, f"session_secret = {HIGH_ENTROPY_TOKEN}")
+    findings = det.scan(line, exclude=set())
+    assert len(findings) == 1
+    assert findings[0].rule == ENTROPY_RULE_ID
+    assert findings[0].severity == SEVERITY_MEDIUM
+
+
+def test_entropy_gate_fires_on_json_session_secret_key():
+    det = EntropyDetector(threshold=4.5, min_length=16, allowlist=[])
+    line = AddedLine("cfg.json", 2, f'"session_secret": "{HIGH_ENTROPY_TOKEN_40}"')
+    findings = det.scan(line, exclude=set())
+    assert len(findings) == 1
+    assert findings[0].rule == ENTROPY_RULE_ID
+    assert findings[0].secret_preview == mask_secret(HIGH_ENTROPY_TOKEN_40)
+
+
 def test_pipeline_regex_beats_entropy():
-    line = AddedLine("src/app.py", 1, f'k = "{AWS_KEY}"')
+    line = AddedLine("src/app.py", 1, f'token = "{AWS_KEY}"')
     # entropy alone would flag the key (raw H ≈ 4.08 ≥ 4.0)...
     assert len(EntropyDetector(4.0, 16, []).scan(line, exclude=set())) == 1
     # ...but the regex pass wins: single finding, no entropy duplicate.
@@ -213,8 +280,12 @@ def test_pipeline_regex_beats_entropy():
 def test_pipeline_default_config_fires_on_high_entropy_token():
     config = load_config(None)
     assert config.entropy_threshold == 4.5  # production default
-    assert shannon_entropy(HIGH_ENTROPY_TOKEN) >= config.entropy_threshold
-    line = AddedLine("src/app.py", 1, f'const = "{HIGH_ENTROPY_TOKEN}"')
+    candidate = HIGH_ENTROPY_TOKEN_36
+    assert len(candidate) >= config.entropy_min_length
+    assert shannon_entropy(candidate) >= config.entropy_threshold  # self-validating
+    # Context via `token =`, but the assignment value run `ab` is below every
+    # default assignment rule's value minimum → only entropy can claim this.
+    line = AddedLine("src/app.py", 1, f'token = "ab" {candidate}')
     findings = DetectionPipeline(config).run([line])
     assert [f.rule for f in findings] == [ENTROPY_RULE_ID]
 
@@ -237,7 +308,7 @@ def test_pipeline_dedupes_same_file_line_rule():
     line = AddedLine(
         "src/app.py",
         7,
-        f'x = "{HIGH_ENTROPY_TOKEN}" y = "{HIGH_ENTROPY_TOKEN_2}"',
+        f'token = "{HIGH_ENTROPY_TOKEN}" y = "{HIGH_ENTROPY_TOKEN_2}"',
     )
     # duplicate line (staged+unstaged overlap) and two candidates on one line
     findings = DetectionPipeline(_config(rules=[])).run([line, line])
@@ -269,7 +340,7 @@ def test_pipeline_returns_findings_in_stable_order():
         [
             AddedLine("a.py", 10, f'k = "{AWS_KEY}"'),
             AddedLine("b.py", 5, PASSWORD_LINE),
-            AddedLine("c.py", 3, f'z = "{HIGH_ENTROPY_TOKEN}"'),
+            AddedLine("c.py", 3, f'token = "{HIGH_ENTROPY_TOKEN}"'),
         ]
     )
     assert [f.rule for f in findings] == [

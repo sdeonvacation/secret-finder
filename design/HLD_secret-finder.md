@@ -149,9 +149,19 @@ class JsonReporter: ...   # stable schema (section 6)
    regex rule already matched the same line, so the primary rule's precise
    reason wins. Tier 3 findings are "secondary heuristic, not proof".
 3. **Entropy pass** runs only on candidate substrings **not already matched**
-   by any regex rule in step 1. This is the "regex wins" rule: known shapes
-   always get a precise reason; entropy only catches novel secrets. This
-   exclusion is unchanged — entropy suppression is unaffected by the Tier 3
+   by any regex rule in step 1, and only when the same line matches the
+   credential-context pattern — a credential-like name in assignment
+   position (optional closing quote supports JSON keys):
+
+   ```
+   (?:^|[^A-Za-z0-9])(?:password|passwd|pass|pwd|secret|token|api[_-]?key|access[_-]?key|client[_-]?secret)['\"]?\s*[:=]
+   ```
+
+   Entropy is a secondary signal for values associated with credential-like
+   names; context-free high-entropy strings are not flagged. This is the
+   "regex wins" rule: known shapes always get a precise reason; entropy only
+   catches novel secrets bound to a credential-like name. This exclusion is
+   unchanged — entropy suppression is unaffected by the Tier 3
    heuristic-suppression step.
 4. **Dedupe**: findings keyed by `(file, line, rule)`; first occurrence wins
    (handles staged+unstaged overlap).
@@ -222,8 +232,19 @@ Merge rules:
 - **Flag** a candidate when the **raw** Shannon entropy `H` (bits per
   character, unnormalized) satisfies `H >= threshold` **and**
   `len >= min_length` **and** it is not matched by any allowlist pattern
-  **and** it was not consumed by the regex pass. A per-rule `entropy_floor`
-  (example `3.0`) is compared against the same raw `H`.
+  **and** it was not consumed by the regex pass **and** the same line
+  matches the credential-context pattern (a credential-like name in
+  assignment position; optional closing quote supports JSON keys):
+
+  ```
+  (?:^|[^A-Za-z0-9])(?:password|passwd|pass|pwd|secret|token|api[_-]?key|access[_-]?key|client[_-]?secret)['\"]?\s*[:=]
+  ```
+
+  High-entropy strings without that context are deliberately not flagged —
+  the context-free behavior FP'd IDE workspace.xml `id=`/`value=`
+  attributes; keyword rules still flag `password="..."` attributes in XML.
+  A per-rule `entropy_floor` (example `3.0`) is compared against the same
+  raw `H`.
 - **Charset normalization**: dividing `H` by `log2(distinct chars)` is an
   exported utility only — it is **not** part of the gating decision.
 - **Allowlist** (sha1 `[0-9a-f]{40}`, sha256 `[0-9a-f]{64}`, UUID) suppresses
@@ -241,7 +262,7 @@ Merge rules:
 | Binary files | Detect `Binary files ... differ` / `GIT binary patch`; skip entire file |
 | Untracked files (not in `git diff`) | `git ls-files --others --exclude-standard`; read directly, every line is "added" |
 | Large diffs | Generator-based streaming throughout; no full materialization |
-| Entropy false positives | threshold + min_length + allowlist + ignore_paths + regex precedence |
+| Entropy false positives | threshold + min_length + allowlist + credential-context gate + ignore_paths + regex precedence |
 | Staged+unstaged overlap | dedupe on `(file, line, rule)` |
 | Config file errors | fail fast with exit `2`, message names the bad rule/key |
 | `git` not installed / not a repo | catch subprocess failure → exit `2` with actionable message |
